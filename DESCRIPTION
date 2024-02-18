@@ -1,0 +1,30 @@
+Package: CGEI
+Type: Package
+Title: R package for computing the Composite Greenspace Exposure Index (CGEI)
+Version: 1.0
+Date: 2024-02-18
+Authors@R: 
+    c(person(given = "Sebastian",
+           family = "Brinkmann",
+           role = c("aut", "cre"),
+           email = "sebastian.brinkmann@fau.de",
+           comment = c(ORCID = "0000-0001-9835-7347")))
+Maintainer: Your Name <your@email.com>
+Description: One paragraph description of what the package does as one or more full
+          sentences.
+License: MIT + file LICENSE
+Encoding: UTF-8
+URL: https://github.com/STBrinkmann/CGEI
+BugReports: https://github.com/STBrinkmann/CGEI/issues
+Imports: 
+    checkmate,
+    future,
+    future.apply,
+    Rcpp (>= 1.0.11),
+    sf,
+    terra
+LinkingTo: Rcpp
+Suggests: 
+    testthat (>= 3.0.0)
+RoxygenNote: 7.3.1
+Config/testthat/edition: 3
