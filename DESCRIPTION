@@ -22,6 +22,7 @@ Imports:
     future,
     future.apply,
     ggplot2,
+    magrittr,
     methods,
     Rcpp (>= 1.0.11),
     sf,
