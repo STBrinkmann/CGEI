@@ -18,13 +18,17 @@ URL: https://github.com/STBrinkmann/CGEI
 BugReports: https://github.com/STBrinkmann/CGEI/issues
 Imports: 
     checkmate,
+    dplyr,
     future,
     future.apply,
+    ggplot2,
     methods,
     Rcpp (>= 1.0.11),
     sf,
     terra
-LinkingTo: Rcpp
+LinkingTo: 
+    Rcpp,
+    RcppProgress
 Suggests: 
     testthat (>= 3.0.0)
 RoxygenNote: 7.3.1
