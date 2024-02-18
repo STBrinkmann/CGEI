@@ -45,6 +45,22 @@ If \code{x} is a binary raster (e.g. Land Use) Lacunarity is beening calculated 
 }
 \examples{
 # Create a SpatRast as input
+mat_sample <- matrix(data = c(
+   1,1,0,1,1,1,0,1,0,1,1,0,
+   0,0,0,0,0,1,0,0,0,1,1,1,
+   0,1,0,1,1,1,1,1,0,1,1,0,
+   1,0,1,1,1,0,0,0,0,0,0,0,
+   1,1,0,1,0,1,0,0,1,1,0,0,
+   0,1,0,1,1,0,0,1,0,0,1,0,
+   0,0,0,0,0,1,1,1,1,1,1,1,
+   0,1,1,0,0,0,1,1,1,1,0,0,
+   0,1,1,1,0,1,1,0,1,0,0,1,
+   0,1,0,0,0,0,0,0,0,1,1,1,
+   0,1,0,1,1,1,0,1,1,0,1,0,
+   0,1,0,0,0,1,0,1,1,1,0,1
+   ), nrow = 12, ncol = 12, byrow = TRUE
+)
+x <- terra::rast(mat_sample)
 
 lacunarity(x)
 
