@@ -95,7 +95,14 @@ library(CGEI)
 vs <- vgvi(observers = observer, 
            dsm_rast = DSM, dtm_rast = DEM, greenspace_rast = GreenSpace, 
            max_distance = 200, observer_height = 1.7)
-#> |---------|---------|---------|---------|=========================================                                          
+#> memfrac   : 0.6
+#> tolerance : 0.1
+#> verbose   : FALSE
+#> todisk    : FALSE
+#> tempdir   : C:/Users/basti/AppData/Local/Temp/RtmpKW0dY2
+#> datatype  : FLT4S
+#> memmin    : 1
+#> progress  : 3
 print(vs)
 #> [1] 0.7489548
 ```
