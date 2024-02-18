@@ -5,7 +5,7 @@
 
 <!-- badges: start -->
 
-[![R-CMD-check](https://github.com/STBrinkmann/CGEI/actions/workflows/check-standard.yaml/badge.svg)](https://github.com/STBrinkmann/CGEI/actions/workflows/R-CMD-check.yaml)
+[![R-CMD-check](https://github.com/STBrinkmann/CGEI/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/STBrinkmann/CGEI/actions/workflows/R-CMD-check.yaml)
 
 <!-- badges: end -->
 
@@ -99,7 +99,7 @@ vs <- vgvi(observers = observer,
 #> tolerance : 0.1
 #> verbose   : FALSE
 #> todisk    : FALSE
-#> tempdir   : C:/Users/basti/AppData/Local/Temp/RtmpKW0dY2
+#> tempdir   : C:/Users/basti/AppData/Local/Temp/Rtmpm2uWLv
 #> datatype  : FLT4S
 #> memmin    : 1
 #> progress  : 3
