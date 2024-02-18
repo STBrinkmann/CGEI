@@ -65,7 +65,7 @@ bbox_observers <- st_bbox(observers)
 x_range <- bbox_observers[c("xmin", "xmax")]
 y_range <- bbox_observers[c("ymin", "ymax")]
 
-# Create a raster with 1km x 1km around the observers with a resolution of 100m for DSM, DTM, and greenspace
+# Create a raster with 1km x 1km around the observers
 dsm_rast <- rast(nrows=100, ncols=100,
                  xmin=min(x_range)-1000, xmax=max(x_range) + 1000, 
                  ymin=min(y_range)-1000, ymax=max(y_range) + 1000, 
