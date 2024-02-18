@@ -81,6 +81,7 @@ calculate_weights <- function(distance_raster, mode, m, b) {
 #' }
 #'
 #' @export
+#' @importFrom methods is
 #' @importFrom sf st_as_sf st_transform
 #' @importFrom terra rast res crop extract writeRaster buffer viewshed distance
 #' @importFrom checkmate assert
@@ -106,11 +107,11 @@ vgvi <- function(observers, dsm_rast, dtm_rast, greenspace_rast,
   checkmate::assert(all(terra::res(dsm_rast) == terra::res(greenspace_rast)), "dsm_rast and greenspace_rast must have the same resolution")
   
   # Check other parameters
-  checkmate::assert(is(max_distance, "numeric"), "max_distance must be a numeric")
-  checkmate::assert(is(observer_height, "numeric"), "observer_height must be a numeric")
-  checkmate::assert(is(m, "numeric"), "m must be a numeric")
-  checkmate::assert(is(b, "numeric"), "b must be a numeric")
-  checkmate::assert(is(mode, "character"), "mode must be a character")
+  checkmate::assert(methods::is(max_distance, "numeric"), "max_distance must be a numeric")
+  checkmate::assert(methods::is(observer_height, "numeric"), "observer_height must be a numeric")
+  checkmate::assert(methods::is(m, "numeric"), "m must be a numeric")
+  checkmate::assert(methods::is(b, "numeric"), "b must be a numeric")
+  checkmate::assert(methods::is(mode, "character"), "mode must be a character")
   mode <- match.arg(mode, c("none", "exponential", "logit"))
   
   # Check crs
@@ -184,7 +185,7 @@ vgvi <- function(observers, dsm_rast, dtm_rast, greenspace_rast,
                                                weighted_viewshed <- viewshed * weights
                                                
                                                # Calculate VGVI with weights for the current observer
-                                               return(sum(values(weighted_green), na.rm = TRUE) / sum(values(weighted_viewshed), na.rm = TRUE))
+                                               return(sum(weighted_green[], na.rm = TRUE) / sum(weighted_viewshed[], na.rm = TRUE))
                                              })
   
   # Clean up temporary files
