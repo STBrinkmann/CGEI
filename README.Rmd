@@ -16,6 +16,7 @@ knitr::opts_chunk$set(
 # CGEI
 
 <!-- badges: start -->
+[![R-CMD-check](https://github.com/STBrinkmann/CGEI/actions/workflows/check-standard.yaml/badge.svg)](https://github.com/STBrinkmann/CGEI/actions/workflows/R-CMD-check.yaml)
 
 <!-- badges: end -->
 
@@ -72,9 +73,9 @@ library(sf)
 library(sfheaders)
 
 # Load raster objects
-DEM <- rast(DEM_tmp)
-DSM <- rast(DSM_tmp)
 GreenSpace <- rast(GS_tmp)
+DEM <- DEM_tmp %>% rast() %>% resample(GreenSpace)
+DSM <- DSM_tmp %>% rast() %>% resample(GreenSpace)
 
 # Generate single observer point
 observer <- st_sf(sf_point(c(492243.3, 5454231.4)), crs = st_crs(26910))
@@ -86,5 +87,8 @@ Calculate the VGVI for a 200 meters radius around the observers position at 1.7 
 
 ```{r message=FALSE, warning=FALSE, fig.height=5, fig.width=10}
 library(CGEI)
-vs <- vgvi(observers = observer, dsm_rast = DSM, dtm_rast = DEM)
+vs <- vgvi(observers = observer, 
+           dsm_rast = DSM, dtm_rast = DEM, greenspace_rast = GreenSpace, 
+           max_distance = 200, observer_height = 1.7)
+print(vs)
 ```
