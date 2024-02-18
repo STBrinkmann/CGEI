@@ -47,6 +47,8 @@
 #' @importFrom ggplot2 ggplot aes geom_line labs scale_x_continuous scale_y_continuous theme_minimal element_text theme ggsave
 #' @importFrom checkmate testClass testCharacter assertClass assertIntegerish assertNumeric assertFlag assertNumeric
 #' @importFrom magrittr %>%
+#' @importFrom stats na.omit
+#' @importFrom utils write.csv
 #' @useDynLib CGEI, .registration = TRUE
 lacunarity <- function(x, r_vec = NULL, r_max = NULL, plot = FALSE, plot_path = NULL, progress = FALSE, ncores = 1L) {
   
@@ -73,7 +75,9 @@ lacunarity <- function(x, r_vec = NULL, r_max = NULL, plot = FALSE, plot_path = 
   } else if (checkmate::testCharacter(x)) {
     r_paths <- list.files(path = x, pattern = "\\.tif$", full.names = TRUE)
     
-    assertLength(r_paths, lower = 1, .var.name = "r_paths", add = "No .tif files in folder path x.")
+    if (length(r_paths) < 0) {
+      stop("No .tif files in folder path x.")
+    }
     
     x <- lapply(r_paths, terra::rast)
   } else if (checkmate::testClass(x, "SpatRaster")) {
@@ -91,7 +95,7 @@ lacunarity <- function(x, r_vec = NULL, r_max = NULL, plot = FALSE, plot_path = 
   # Check r_vec
   if (!is.null(r_vec)) {
     r_vec[r_vec < 3] <- NA
-    r_vec <- na.omit(r_vec)
+    r_vec <- stats::na.omit(r_vec)
     checkmate::assertIntegerish(r_vec, any.missing = FALSE, lower = 3)
     
     invalid_r <- !(r_vec %% 2)
@@ -133,9 +137,9 @@ lacunarity <- function(x, r_vec = NULL, r_max = NULL, plot = FALSE, plot_path = 
     name = as.character(),
     i = as.integer(),
     r = as.integer(),
-    "ln(r)" = as.integer(),
+    `ln(r)` = as.integer(),
     Lac = as.numeric(),
-    "ln(Lac)" = as.numeric()
+    `ln(Lac)` = as.numeric()
   )
   
   # Convert x to list
@@ -184,9 +188,9 @@ lacunarity <- function(x, r_vec = NULL, r_max = NULL, plot = FALSE, plot_path = 
       name = rep(names(this_x)[1], length(this_lac)),
       i = i,
       r = r_vec,
-      "ln(r)" = log(r_vec),
+      `ln(r)` = log(r_vec),
       Lac = this_lac,
-      "ln(Lac)" = log(this_lac)
+      `ln(Lac)` = log(this_lac)
     )
     
     out <- dplyr::bind_rows(out, this_out)
@@ -205,16 +209,13 @@ lacunarity <- function(x, r_vec = NULL, r_max = NULL, plot = FALSE, plot_path = 
       x_names <- as.character(out$name)
     }
     
-    #max_x <- ceiling(max(out$`ln(r)`, na.rm = TRUE))
-    #max_y <- round(max(out$`ln(Lac)`, na.rm = TRUE), 1)+0.1
-    
-    out_na_rm <- na.omit(out)
+    out_na_rm <- stats::na.omit(out)
     max_x <- NA
     max_y <- NA
     
     for (i in 1:nrow(out_na_rm)) {
-      r_sort <- sort(out_na_rm$`ln(r)`, decreasing = TRUE)
-      lac_sort <- sort(out_na_rm$`ln(Lac)`, decreasing = TRUE)
+      r_sort <- sort(out_na_rm[["ln(r)"]], decreasing = TRUE)
+      lac_sort <- sort(out_na_rm[["ln(Lac)"]], decreasing = TRUE)
       
       if(is.na(max_x) && is.finite(r_sort[i])){
         if(i > 1){
@@ -233,36 +234,35 @@ lacunarity <- function(x, r_vec = NULL, r_max = NULL, plot = FALSE, plot_path = 
     
     if(is.na(max_y) || is.na(max_x)) {
       warning("Plot can't be created. Please look into the output table")
-      break
+    } else {
+      p <- ggplot2::ggplot(data = out,
+                           mapping = ggplot2::aes(x = `ln(r)`,
+                                                  y = `ln(Lac)`,
+                                                  colour = x_names),
+                           environment = environment()) +
+        ggplot2::geom_line(lwd = 0.8) +
+        ggplot2::labs(x = "ln(r)",
+                      y = "ln(lacunarity)",
+                      colour = "Legend") +
+        ggplot2::scale_x_continuous(breaks = seq(0, max_x, 1),
+                                    limits = c(1, max_x)) +
+        ggplot2::scale_y_continuous(breaks = seq(0, max_y, 0.1),
+                                    limits = c(0, max_y)) +
+        ggplot2::theme_minimal() +
+        ggplot2::theme(axis.title = ggplot2::element_text(size = 14),
+                       axis.text = ggplot2::element_text(size = 12),
+                       legend.text = ggplot2::element_text(size = 12),
+                       legend.title = ggplot2::element_text(size = 14))
+      
+      print(p)
     }
-    
-    p <- ggplot2::ggplot(data = out,
-                         mapping = ggplot2::aes(x = `ln(r)`,
-                                                y = `ln(Lac)`,
-                                                colour = x_names),
-                         environment = environment()) +
-      ggplot2::geom_line(lwd = 0.8) +
-      ggplot2::labs(x = "ln(r)",
-                    y = "ln(lacunarity)",
-                    colour = "Legend") +
-      ggplot2::scale_x_continuous(breaks = seq(0, max_x, 1),
-                                  limits = c(1, max_x)) +
-      ggplot2::scale_y_continuous(breaks = seq(0, max_y, 0.1),
-                                  limits = c(0, max_y)) +
-      ggplot2::theme_minimal() +
-      ggplot2::theme(axis.title = ggplot2::element_text(size = 14),
-                     axis.text = ggplot2::element_text(size = 12),
-                     legend.text = ggplot2::element_text(size = 12),
-                     legend.title = ggplot2::element_text(size = 14))
-    
-    print(p)
   }
   
   
   # Save plot ---------------------------------------------------------------
   if (!is.null(plot_path)) {
     # Save out as CSV
-    write.csv(out, file = file.path(temp_path, "Lacunarity.csv"), row.names = FALSE)
+    utils::write.csv(out, file = file.path(temp_path, "Lacunarity.csv"), row.names = FALSE)
     
     # Save summary ggplot
     if (length(unique(out$name)) != length(unique(out$i))) {
@@ -271,16 +271,13 @@ lacunarity <- function(x, r_vec = NULL, r_max = NULL, plot = FALSE, plot_path = 
       x_names <- as.character(out$name)
     }
     
-    #max_x <- ceiling(max(out$`ln(r)`, na.rm = TRUE))
-    #max_y <- round(max(out$`ln(Lac)`, na.rm = TRUE), 1)+0.1
-    
     out_na_rm <- na.omit(out)
     max_x <- NA
     max_y <- NA
     
     for (i in 1:nrow(out_na_rm)) {
-      r_sort <- sort(out_na_rm$`ln(r)`, decreasing = TRUE)
-      lac_sort <- sort(out_na_rm$`ln(Lac)`, decreasing = TRUE)
+      r_sort <- sort(out_na_rm[["ln(r)"]], decreasing = TRUE)
+      lac_sort <- sort(out_na_rm[["ln(Lac)"]], decreasing = TRUE)
       
       if(is.na(max_x) && is.finite(r_sort[i])){
         if(i > 1){
@@ -299,34 +296,33 @@ lacunarity <- function(x, r_vec = NULL, r_max = NULL, plot = FALSE, plot_path = 
     
     if(is.na(max_y) || is.na(max_x)) {
       warning("Plot can't be created. Please look into the output table")
-      break
+    } else {
+      p <- ggplot2::ggplot(data = out,
+                           mapping = ggplot2::aes(x = `ln(r)`,
+                                                  y = `ln(Lac)`,
+                                                  colour = x_names),
+                           environment = environment()) +
+        ggplot2::geom_line(lwd = 0.8) +
+        ggplot2::labs(x = "ln(r)", y = "ln(lacunarity)",
+                      colour = "Legend") +
+        ggplot2::scale_x_continuous(breaks = seq(0, max_x, 1), limits = c(1, max_x)) +
+        ggplot2::scale_y_continuous(breaks = seq(0, max_y, 0.1), limits = c(0, max_y)) +
+        ggplot2::theme_minimal() +
+        ggplot2::theme(axis.title = ggplot2::element_text(size = 14),
+                       axis.text = ggplot2::element_text(size = 12),
+                       legend.text = ggplot2::element_text(size = 12),
+                       legend.title = ggplot2::element_text(size = 14))
+      
+      ggplot2::ggsave(filename = file.path(temp_path, "Lacunarity_summary.svg"), 
+                      plot = p, device = "svg", 
+                      width = 7, height = 6.5, units = "in")
+      ggplot2::ggsave(filename = file.path(temp_path, "Lacunarity_summary.png"), 
+                      plot = p, device = "png", 
+                      width = 7, height = 6.5, units = "in", dpi = 500)
     }
     
-    p <- ggplot2::ggplot(data = out,
-                         mapping = ggplot2::aes(x = `ln(r)`,
-                                                y = `ln(Lac)`,
-                                                colour = x_names),
-                         environment = environment()) +
-      ggplot2::geom_line(lwd = 0.8) +
-      ggplot2::labs(x = "ln(r)", y = "ln(lacunarity)",
-                    colour = "Legend") +
-      ggplot2::scale_x_continuous(breaks = seq(0, max_x, 1), limits = c(1, max_x)) +
-      ggplot2::scale_y_continuous(breaks = seq(0, max_y, 0.1), limits = c(0, max_y)) +
-      ggplot2::theme_minimal() +
-      ggplot2::theme(axis.title = ggplot2::element_text(size = 14),
-                     axis.text = ggplot2::element_text(size = 12),
-                     legend.text = ggplot2::element_text(size = 12),
-                     legend.title = ggplot2::element_text(size = 14))
-    
-    ggplot2::ggsave(filename = file.path(temp_path, "Lacunarity_summary.svg"), 
-                    plot = p, device = "svg", 
-                    width = 7, height = 6.5, units = "in")
-    ggplot2::ggsave(filename = file.path(temp_path, "Lacunarity_summary.png"), 
-                    plot = p, device = "png", 
-                    width = 7, height = 6.5, units = "in", dpi = 500)
-    
     # Save unique plots
-    if (length(x) > 1) {
+    if (length(x) > 1 & (!is.na(max_y) && !is.na(max_x))) {
       for (i in seq_along(x)) {
         this_out <- out[out$i == i, ]
         
@@ -336,16 +332,13 @@ lacunarity <- function(x, r_vec = NULL, r_max = NULL, plot = FALSE, plot_path = 
           x_names <- as.character(this_out$name)
         }
         
-        #max_x <- ceiling(max(this_out$`ln(r)`, na.rm = TRUE))
-        #max_y <- round(max(this_out$`ln(Lac)`, na.rm = TRUE), 1)+0.1
-        
         out_na_rm <- na.omit(this_out)
         max_x <- NA
         max_y <- NA
         
         for (i in 1:nrow(out_na_rm)) {
-          r_sort <- sort(out_na_rm$`ln(r)`, decreasing = TRUE)
-          lac_sort <- sort(out_na_rm$`ln(Lac)`, decreasing = TRUE)
+          r_sort <- sort(out_na_rm[["ln(r)"]], decreasing = TRUE)
+          lac_sort <- sort(out_na_rm[["ln(Lac)"]], decreasing = TRUE)
           
           if(is.na(max_x) && is.finite(r_sort[i])){
             if(i > 1){
@@ -364,31 +357,31 @@ lacunarity <- function(x, r_vec = NULL, r_max = NULL, plot = FALSE, plot_path = 
         
         if(is.na(max_y) || is.na(max_x)) {
           warning("Plot can't be created. Please look into the output table")
-          break
+          
+        } else {
+          p <- ggplot2::ggplot(data = this_out,
+                               mapping = ggplot2::aes(x = `ln(r)`,
+                                                      y = `ln(Lac)`,
+                                                      colour = x_names),
+                               environment = environment()) +
+            ggplot2::geom_line(lwd = 0.8) +
+            ggplot2::labs(x = "ln(r)", y = "ln(lacunarity)",
+                          colour = "Legend") +
+            ggplot2::scale_x_continuous(breaks = seq(0, max_x, 1), limits = c(1, max_x)) +
+            ggplot2::scale_y_continuous(breaks = seq(0, max_y, 0.1), limits = c(0, max_y)) +
+            ggplot2::theme_minimal() +
+            ggplot2::theme(axis.title = ggplot2::element_text(size = 14),
+                           axis.text = ggplot2::element_text(size = 12),
+                           legend.text = ggplot2::element_text(size = 12),
+                           legend.title = ggplot2::element_text(size = 14))
+          
+          ggplot2::ggsave(filename = file.path(temp_path, paste0("Lacunarity_", i, ".svg")), 
+                          plot = p, device = "svg", 
+                          width = 7, height = 6.5, units = "in")
+          ggplot2::ggsave(filename = file.path(temp_path, paste0("Lacunarity_", i, ".png")), 
+                          plot = p, device = "png", 
+                          width = 7, height = 6.5, units = "in", dpi = 500)
         }
-        
-        p <- ggplot2::ggplot(data = this_out,
-                             mapping = ggplot2::aes(x = `ln(r)`,
-                                                    y = `ln(Lac)`,
-                                                    colour = x_names),
-                             environment = environment()) +
-          ggplot2::geom_line(lwd = 0.8) +
-          ggplot2::labs(x = "ln(r)", y = "ln(lacunarity)",
-                        colour = "Legend") +
-          ggplot2::scale_x_continuous(breaks = seq(0, max_x, 1), limits = c(1, max_x)) +
-          ggplot2::scale_y_continuous(breaks = seq(0, max_y, 0.1), limits = c(0, max_y)) +
-          ggplot2::theme_minimal() +
-          ggplot2::theme(axis.title = ggplot2::element_text(size = 14),
-                         axis.text = ggplot2::element_text(size = 12),
-                         legend.text = ggplot2::element_text(size = 12),
-                         legend.title = ggplot2::element_text(size = 14))
-        
-        ggplot2::ggsave(filename = file.path(temp_path, paste0("Lacunarity_", i, ".svg")), 
-                        plot = p, device = "svg", 
-                        width = 7, height = 6.5, units = "in")
-        ggplot2::ggsave(filename = file.path(temp_path, paste0("Lacunarity_", i, ".png")), 
-                        plot = p, device = "png", 
-                        width = 7, height = 6.5, units = "in", dpi = 500)
       } 
     }
   }
