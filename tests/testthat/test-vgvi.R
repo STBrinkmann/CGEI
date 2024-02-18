@@ -1,4 +1,4 @@
-test_that("multiplication works", {
+test_that("VGVI works", {
   # Simulate observer locations as sf points
   observers <- sf::st_as_sf(data.frame(lon = c(5, 5.1), lat = c(52, 52.1)),
                             coords = c("lon", "lat"), crs = 4326)
