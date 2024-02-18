@@ -90,6 +90,9 @@ vgvi <- function(observers, dsm_rast, dtm_rast, greenspace_rast,
                  max_distance = 200, observer_height = 1.7, 
                  m = 1, b = 6, mode = c("none", "exponential", "logit"),
                  cores = 1L) {
+  optProgress <- terra::terraOptions()$progress
+  terra::terraOptions(progress=0)
+  
   # Check observers
   checkmate::assert(is(observers, "sf"), "observers must be an sf object")
   
@@ -190,6 +193,6 @@ vgvi <- function(observers, dsm_rast, dtm_rast, greenspace_rast,
     file.remove(dtm_rast_p)
     file.remove(greenspace_rast_p)
   }
-  
+  terra::terraOptions(progress=optProgress)
   return(unlist(vgv_indices))
 }
