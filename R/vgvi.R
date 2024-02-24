@@ -38,6 +38,7 @@ calculate_weights <- function(distance_raster, mode, m, b) {
 #' @param greenspace_rast A `SpatRaster` object representing the greenspace within the area. Greenspaces are indicated by a value of 1, and non-greenspaces by a value of 0.
 #' @param max_distance The maximum distance (in meters) from the observer location within which the greenspace visibility is calculated. Default is 200 meters.
 #' @param observer_height The height (in meters) of the observer above the ground level. Default is 1.7 meters.
+#' @param spacing optional; numeric > 0; Only if \code{observer} is a LINESTRING. Points on the line will be generated. The \code{spacing} parameter sets the distance in between the points on the line/grid. Defaults to the resolution of the \code{dsm_rast}.
 #' @param m Parameter for the decay function, applicable if a decay function is selected. Default is 1.
 #' @param b Parameter for the decay function, applicable if a decay function is selected. Default is 6.
 #' @param mode A character string specifying the type of decay function to apply to the visibility weights. Options are "none" (no decay), "exponential", or "logit". Default is "none".
@@ -82,16 +83,17 @@ calculate_weights <- function(distance_raster, mode, m, b) {
 #'
 #' @export
 #' @importFrom methods is
-#' @importFrom sf st_as_sf st_transform
+#' @importFrom sf st_as_sf st_transform st_geometry_type st_union st_cast st_line_sample st_set_geometry
 #' @importFrom terra rast res crop extract writeRaster buffer viewshed distance
 #' @importFrom checkmate assert
 #' @importFrom future plan multisession
 #' @importFrom future.apply future_lapply
 vgvi <- function(observers, dsm_rast, dtm_rast, greenspace_rast,
                  max_distance = 200, observer_height = 1.7, 
+                 spacing = NULL,
                  m = 1, b = 6, mode = c("none", "exponential", "logit"),
                  cores = 1L) {
-  optProgress <- terra::terraOptions()$progress
+  optProgress <- terra::terraOptions(print = FALSE)$progress
   terra::terraOptions(progress=0)
   
   # Check observers
@@ -119,8 +121,26 @@ vgvi <- function(observers, dsm_rast, dtm_rast, greenspace_rast,
   checkmate::assert(identical(sf::st_crs(observers)$proj4string, terra::crs(greenspace_rast, proj = TRUE)), "dsm_rast and greenspace_rast must have the same crs")
   checkmate::assert(identical(sf::st_crs(observers)$proj4string, terra::crs(dsm_rast, proj = TRUE)), "dsm_rast and observer must have the same crs")
   
-  # Initialize a vector to store VGVI results for each observer
-  vgv_indices <- numeric(nrow(observers))
+  # Check spacing
+  if(!is.null(spacing)) {
+    checkmate::assert(methods::is(spacing, "numeric"), "spacing must be a numeric")
+  } else {
+    spacing <- terra::res(dsm_rast)[1]
+  }
+  
+  # Convert observer to POINT if it is LINESTRING/MULTILINESTRING
+  if(sf::st_geometry_type(observers) %in% c("LINESTRING", "MULTILINESTRING")) {
+    geom_name <- 
+    observers <- observers %>%
+      sf::st_union() %>% 
+      sf::st_cast("LINESTRING") %>%
+      sf::st_line_sample(density = 1/2)
+    
+    observers <- observers[!sf::st_is_empty(observers)] %>% 
+      sf::st_cast("POINT") %>% 
+      sf::st_as_sf() %>% 
+      sf::st_set_geometry("geom")
+  }
   
   # Calculate observer height above ground
   observers_height_alg <- observer_height + 
@@ -194,6 +214,11 @@ vgvi <- function(observers, dsm_rast, dtm_rast, greenspace_rast,
     file.remove(dtm_rast_p)
     file.remove(greenspace_rast_p)
   }
-  terra::terraOptions(progress=optProgress)
-  return(unlist(vgv_indices))
+  terra::terraOptions(progress=optProgress, print=FALSE)
+  
+  observers <- observers %>% 
+    dplyr::mutate(VGVI = unlist(vgv_indices)) %>%
+    dplyr::relocate(VGVI)
+  
+  return(observers)
 }
