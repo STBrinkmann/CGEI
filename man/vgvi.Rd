@@ -11,6 +11,7 @@ vgvi(
   greenspace_rast,
   max_distance = 200,
   observer_height = 1.7,
+  spacing = NULL,
   m = 1,
   b = 6,
   mode = c("none", "exponential", "logit"),
@@ -29,6 +30,8 @@ vgvi(
 \item{max_distance}{The maximum distance (in meters) from the observer location within which the greenspace visibility is calculated. Default is 200 meters.}
 
 \item{observer_height}{The height (in meters) of the observer above the ground level. Default is 1.7 meters.}
+
+\item{spacing}{optional; numeric > 0; Only if \code{observer} is a LINESTRING. Points on the line will be generated. The \code{spacing} parameter sets the distance in between the points on the line/grid. Defaults to the resolution of the \code{dsm_rast}.}
 
 \item{m}{Parameter for the decay function, applicable if a decay function is selected. Default is 1.}
 
