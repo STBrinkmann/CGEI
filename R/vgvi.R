@@ -129,7 +129,7 @@ vgvi <- function(observers, dsm_rast, dtm_rast, greenspace_rast,
   }
   
   # Convert observer to POINT if it is LINESTRING/MULTILINESTRING
-  if(sf::st_geometry_type(observers) %in% c("LINESTRING", "MULTILINESTRING")) {
+  if(sf::st_geometry_type(observers, by_geometry = FALSE) %in% c("LINESTRING", "MULTILINESTRING")) {
     geom_name <- 
     observers <- observers %>%
       sf::st_union() %>% 

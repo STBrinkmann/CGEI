@@ -28,5 +28,5 @@ test_that("VGVI works", {
   # Calculate VGVI
   vgvi_results <- CGEI::vgvi(observers, dsm_rast, dtm_rast, greenspace_rast)
   
-  testthat::expect_equal(vgvi_results, c(0.8, 0.6))
+  testthat::expect_equal(vgvi_results$VGVI, c(0.8, 0.6))
 })
