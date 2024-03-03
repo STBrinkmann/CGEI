@@ -24,6 +24,7 @@ Imports:
     ggplot2,
     magrittr,
     methods,
+    raster,
     Rcpp (>= 1.0.11),
     sf,
     terra
