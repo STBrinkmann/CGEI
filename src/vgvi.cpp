@@ -14,7 +14,7 @@ using namespace Rcpp;
 // [[Rcpp::plugins(openmp)]]
 // [[Rcpp::depends(RcppProgress)]]
 #include <progress.hpp>
-#include "eta_progress_bar.hpp"
+#include "eta_progress_bar.h"
 
 // [[Rcpp::export]]
 std::vector<double> VGVI_cpp(Rcpp::S4 &dsm, const Rcpp::NumericVector &dsm_values,

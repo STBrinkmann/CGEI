@@ -1,6 +1,6 @@
 #' Viewshed Greenness Visibility Index (VGVI)
 #'
-#' @description The VGVI expresses the proportion of visible greenness to the total visible area based on a \code{\link[GVI]{viewshed}}.
+#' @description The VGVI expresses the proportion of visible greenness to the total visible area based on a viewshed.
 #' The estimated VGVI values range between 0 and 1, where 0 = no green cells are visible, and 1 = all of the visible cells are green.
 #' A distance decay function is applied, to account for the reducing visual prominence of an object in space with increasing distance from the observer.
 #'
