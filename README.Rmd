@@ -75,8 +75,8 @@ library(sfheaders)
 
 # Load raster objects
 GreenSpace <- rast(GS_tmp)
-DEM <- DEM_tmp %>% rast() %>% resample(GreenSpace)
-DSM <- DSM_tmp %>% rast() %>% resample(GreenSpace)
+DEM <- rast(DEM_tmp)
+DSM <- rast(DSM_tmp)
 
 # Generate single observer point
 observer <- st_sf(sf_point(c(492243.3, 5454231.4)), crs = st_crs(26910))
@@ -88,13 +88,12 @@ Calculate the VGVI for a 200 meters radius around the observers position at 1.7 
 
 ```{r message=FALSE, warning=FALSE}
 library(CGEI)
-vgvi_sf <- vgvi(observers = observer, 
+vgvi_sf <- vgvi(observer = observer, 
                 dsm_rast = DSM, dtm_rast = DEM, greenspace_rast = GreenSpace, 
-                max_distance = 200, observer_height = 1.7, mode = "exponential")
+                max_distance = 200, observer_height = 1.7)
 vgvi_sf$VGVI
 ```
-
-The output of \~0.67 indicates, that \~67% of the visible area, within a 200 meters radius, is covered by greenspace.
+The output of \~0.61 indicates, that \~61% of the visible area, within a 200 meters radius, is covered by greenspace.
 
 ### 2. Road Network
 
@@ -107,13 +106,11 @@ isodistance <- read_sf("https://github.com/STBrinkmann/data/raw/main/GVI_Data/is
 
 Compute the VGVI along the line feature. As the resolution of our DSM is 5 meters, points along the line feature will be generated every 5 meters, too.
 
-```{r eval=FALSE, fig.height=4, fig.width=8, message=FALSE, warning=FALSE}
-vgvi_sf <- vgvi(observers = isodistance, 
+```{r fig.height=4, fig.width=8, message=FALSE, warning=FALSE}
+vgvi_sf <- vgvi(observer = isodistance, 
                 dsm_rast = DSM, dtm_rast = DEM, greenspace_rast = GreenSpace, 
                 max_distance = 200, observer_height = 1.7, 
                 m = 1, b = 3, mode = "exponential", cores = 12)
 
 hist(vgvi_sf$VGVI)
 ```
-
-![](docs/VGVI_histogram.png)

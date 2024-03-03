@@ -10,6 +10,20 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// LoS_reference
+Rcpp::IntegerVector LoS_reference(const int x0_ref, const int y0_ref, const int r, const int nc_ref);
+RcppExport SEXP _CGEI_LoS_reference(SEXP x0_refSEXP, SEXP y0_refSEXP, SEXP rSEXP, SEXP nc_refSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const int >::type x0_ref(x0_refSEXP);
+    Rcpp::traits::input_parameter< const int >::type y0_ref(y0_refSEXP);
+    Rcpp::traits::input_parameter< const int >::type r(rSEXP);
+    Rcpp::traits::input_parameter< const int >::type nc_ref(nc_refSEXP);
+    rcpp_result_gen = Rcpp::wrap(LoS_reference(x0_ref, y0_ref, r, nc_ref));
+    return rcpp_result_gen;
+END_RCPP
+}
 // rcpp_lacunarity
 NumericVector rcpp_lacunarity(const NumericMatrix& mat, const IntegerVector& r_vec, const int fun, const int ncores, const bool display_progress);
 RcppExport SEXP _CGEI_rcpp_lacunarity(SEXP matSEXP, SEXP r_vecSEXP, SEXP funSEXP, SEXP ncoresSEXP, SEXP display_progressSEXP) {
@@ -25,9 +39,34 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// VGVI_cpp
+std::vector<double> VGVI_cpp(Rcpp::S4& dsm, const Rcpp::NumericVector& dsm_values, Rcpp::S4& greenspace, const Rcpp::NumericVector& greenspace_values, const Rcpp::IntegerVector& x0, const Rcpp::IntegerVector& y0, const Rcpp::NumericVector& h0, const int radius, const int fun, const double m, const double b, const int ncores, const bool display_progress);
+RcppExport SEXP _CGEI_VGVI_cpp(SEXP dsmSEXP, SEXP dsm_valuesSEXP, SEXP greenspaceSEXP, SEXP greenspace_valuesSEXP, SEXP x0SEXP, SEXP y0SEXP, SEXP h0SEXP, SEXP radiusSEXP, SEXP funSEXP, SEXP mSEXP, SEXP bSEXP, SEXP ncoresSEXP, SEXP display_progressSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::S4& >::type dsm(dsmSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type dsm_values(dsm_valuesSEXP);
+    Rcpp::traits::input_parameter< Rcpp::S4& >::type greenspace(greenspaceSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type greenspace_values(greenspace_valuesSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type x0(x0SEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type y0(y0SEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type h0(h0SEXP);
+    Rcpp::traits::input_parameter< const int >::type radius(radiusSEXP);
+    Rcpp::traits::input_parameter< const int >::type fun(funSEXP);
+    Rcpp::traits::input_parameter< const double >::type m(mSEXP);
+    Rcpp::traits::input_parameter< const double >::type b(bSEXP);
+    Rcpp::traits::input_parameter< const int >::type ncores(ncoresSEXP);
+    Rcpp::traits::input_parameter< const bool >::type display_progress(display_progressSEXP);
+    rcpp_result_gen = Rcpp::wrap(VGVI_cpp(dsm, dsm_values, greenspace, greenspace_values, x0, y0, h0, radius, fun, m, b, ncores, display_progress));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
+    {"_CGEI_LoS_reference", (DL_FUNC) &_CGEI_LoS_reference, 4},
     {"_CGEI_rcpp_lacunarity", (DL_FUNC) &_CGEI_rcpp_lacunarity, 5},
+    {"_CGEI_VGVI_cpp", (DL_FUNC) &_CGEI_VGVI_cpp, 13},
     {NULL, NULL, 0}
 };
 

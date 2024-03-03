@@ -5,7 +5,7 @@
 \title{Viewshed Greenness Visibility Index (VGVI)}
 \usage{
 vgvi(
-  observers,
+  observer,
   dsm_rast,
   dtm_rast,
   greenspace_rast,
@@ -15,11 +15,13 @@ vgvi(
   m = 1,
   b = 6,
   mode = c("none", "exponential", "logit"),
-  cores = 1L
+  cores = 1L,
+  folder_path = NULL,
+  progress = FALSE
 )
 }
 \arguments{
-\item{observers}{An `sf` object containing the observer locations. Each observer location should be a point geometry with a defined coordinate reference system (CRS).}
+\item{observer}{An `sf` object containing the observer locations. Each observer location should be a point geometry with a defined coordinate reference system (CRS).}
 
 \item{dsm_rast}{A `SpatRaster` object representing the Digital Surface Model (DSM) of the area, indicating the elevation of surface objects including vegetation, buildings, and other features.}
 
@@ -31,7 +33,7 @@ vgvi(
 
 \item{observer_height}{The height (in meters) of the observer above the ground level. Default is 1.7 meters.}
 
-\item{spacing}{optional; numeric > 0; Only if \code{observer} is a LINESTRING. Points on the line will be generated. The \code{spacing} parameter sets the distance in between the points on the line/grid. Defaults to the resolution of the \code{dsm_rast}.}
+\item{spacing}{optional; numeric > 0; Only if \code{observer} is a LINESTRING or POLYGON. Points on the line will be generated. The \code{spacing} parameter sets the distance in between the points on the line/grid. Defaults to the resolution of the \code{dsm_rast}.}
 
 \item{m}{Parameter for the decay function, applicable if a decay function is selected. Default is 1.}
 
@@ -40,15 +42,28 @@ vgvi(
 \item{mode}{A character string specifying the type of decay function to apply to the visibility weights. Options are "none" (no decay), "exponential", or "logit". Default is "none".}
 
 \item{cores}{The number of cores to use for parallel processing. This parameter is relevant only if the function is set to run in parallel. Default is 1.}
+
+\item{folder_path}{optional; Folder path to where the output should be saved continuously. Must not inklude a filename extension (e.g. '.shp', '.gpkg').}
+
+\item{progress}{logical; Show progress bar and computation time?}
 }
 \value{
-A numeric vector containing the VGVI values for each observer location.
+sf_object containing the weighted VGVI values as POINT features, where 0 = no green cells are visible, and 1 = all of the visible cells are green.
 }
 \description{
-The VGVI expresses the proportion of visible greenness to the total visible area based on a \code{\link[terra]{viewshed}}.
+The VGVI expresses the proportion of visible greenness to the total visible area based on a \code{\link[GVI]{viewshed}}.
 The estimated VGVI values range between 0 and 1, where 0 = no green cells are visible, and 1 = all of the visible cells are green.
-NA values are returned for observer locations where the observer height is greater than the maximum elevation in the DSM raster.
-A distance decay function can be applied, to account for the reducing visual prominence of an object in space with increasing distance from the observer.
+A distance decay function is applied, to account for the reducing visual prominence of an object in space with increasing distance from the observer.
+}
+\details{
+observer needs to be a geometry of type POINT, LINESTRING, MULTILINESTRING, POLYGON or MULTIPOLYGON. If observer is a LINESTRING or MULTILINESTRING, 
+points will be generated along the line(s) every "resolution" meters. If observer is a POLYGON or MULTIPOLYGON, a grid with resolution = "resolution" 
+will be generated, and VGVI will be computed for every point.
+The CRS (\code{\link[sf]{st_crs}}) needs to have a metric unit!
+
+The type of function, used for calculating the distance decay weights, can be defined with the \code{mode} parameter.
+The argument 'logit' uses the logistic function, d = 1 / (1 + e^(b * (x - m))) and 'exponential' the exponential function d = 1 / (1 + (b * x^m)).
+The decay function can be visualized using the \code{\link[CGEI]{visualizeWeights}} function.
 }
 \examples{
 \dontrun{
@@ -56,23 +71,23 @@ library(sf)
 library(terra)
 
 # Simulate observer locations as sf points
-observers <- st_as_sf(data.frame(lon = c(5, 5.1), lat = c(52, 52.1)),
+observer <- st_as_sf(data.frame(lon = c(5, 5.1), lat = c(52, 52.1)),
                       coords = c("lon", "lat"), crs = 4326)
 
 # Transform to UTM zone 31N for metric units
-observers <- st_transform(observers, 32631)
+observer <- st_transform(observer, 32631)
 
 # Create synthetic rasters for DSM, DTM, and greenspace around observers
 # This is a simplified example assuming flat terrain and random greenspaces
-bbox_observers <- st_bbox(observers)
-x_range <- bbox_observers[c("xmin", "xmax")]
-y_range <- bbox_observers[c("ymin", "ymax")]
+bbox_observer <- st_bbox(observer)
+x_range <- bbox_observer[c("xmin", "xmax")]
+y_range <- bbox_observer[c("ymin", "ymax")]
 
-# Create a raster with 1km x 1km around the observers
+# Create a raster with 1km x 1km around the observer
 dsm_rast <- rast(nrows=100, ncols=100,
                  xmin=min(x_range)-1000, xmax=max(x_range) + 1000, 
                  ymin=min(y_range)-1000, ymax=max(y_range) + 1000, 
-                 crs=crs(observers))
+                 crs=crs(observer))
 dsm_rast[] <- runif(ncell(dsm_rast), 0, 1.5) # Assign random heights
 
 dtm_rast <- rast(dsm_rast, vals=0) # Flat terrain
@@ -81,7 +96,7 @@ greenspace_rast <- rast(dsm_rast)
 values(greenspace_rast) <- sample(0:1, ncell(dsm_rast), replace=TRUE)
 
 # Calculate VGVI
-vgvi_results <- vgvi(observers, dsm_rast, dtm_rast, greenspace_rast)
+vgvi_results <- vgvi(observer, dsm_rast, dtm_rast, greenspace_rast)
 print(vgvi_results)
 }
 
