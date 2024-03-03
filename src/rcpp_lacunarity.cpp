@@ -79,6 +79,8 @@ double lacunarity (NumericVector box_masses,
 // [[Rcpp::plugins(openmp)]]
 // [[Rcpp::depends(RcppProgress)]]
 #include <progress.hpp>
+#include "eta_progress_bar.h"
+
 // [[Rcpp::export]]
 NumericVector rcpp_lacunarity(const NumericMatrix &mat,
                               const IntegerVector &r_vec,
@@ -97,17 +99,14 @@ NumericVector rcpp_lacunarity(const NumericMatrix &mat,
   // Output
   NumericVector output(r_vec.size());
   
-  
   // Progress bar
-  Progress p(r_vec.size(), display_progress);
-  
-  
+  ETAProgressBar pb_ETA;
+  Progress pb(r_vec.size(), display_progress, pb_ETA);
+
   // Begin main loop
   for (int j = 0; j < r_vec.size(); j++) {
     const int r = r_vec[j];
     const int N_r = (mat_width - r + 1) * (mat_height - r + 1);
-    
-    
     
     // Gliding box algorithm
     // Init shared vector for parallel loop
@@ -118,7 +117,7 @@ NumericVector rcpp_lacunarity(const NumericMatrix &mat,
 #pragma omp parallel for shared(box_masses, prev_box_mass_min, prev_box_mass_max, prev_box_mass_sum)
 #endif
     for (int i = 0; i < N_r; i++) {
-      if (!p.is_aborted()) {
+      if (!pb.is_aborted()) {
         Progress::check_abort();
         
         // Get x/y from i
@@ -234,7 +233,7 @@ NumericVector rcpp_lacunarity(const NumericMatrix &mat,
     
     output[j] = lac;
     
-    p.increment();
+    pb.increment();
   }
   
   return(output);

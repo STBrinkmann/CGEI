@@ -14,7 +14,7 @@ test_that("VGVI works", {
 
   # Create a raster with 1km x 1km around the observers with a resolution of 100m for DSM, DTM, and greenspace
   set.seed(123)
-  dsm_rast <- terra::rast(nrows=100, ncols=100,
+  dsm_rast <- terra::rast(res = 100,
                           xmin=min(x_range)-1000, xmax=max(x_range) + 1000,
                           ymin=min(y_range)-1000, ymax=max(y_range) + 1000,
                           crs = terra::crs(observers))
@@ -28,5 +28,5 @@ test_that("VGVI works", {
   # Calculate VGVI
   vgvi_results <- CGEI::vgvi(observers, dsm_rast, dtm_rast, greenspace_rast)
   
-  testthat::expect_equal(vgvi_results, c(0.8, 0.6))
+  testthat::expect_equal(round(vgvi_results$VGVI, 3), c(0.004, 0.001))
 })

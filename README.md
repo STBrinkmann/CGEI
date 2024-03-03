@@ -6,6 +6,7 @@
 <!-- badges: start -->
 
 [![R-CMD-check](https://github.com/STBrinkmann/CGEI/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/STBrinkmann/CGEI/actions/workflows/R-CMD-check.yaml)
+
 <!-- badges: end -->
 
 The goal of CGEI is to …
@@ -91,17 +92,38 @@ at 1.7 meters height (eye level).
 
 ``` r
 library(CGEI)
-vs <- vgvi(observers = observer, 
-           dsm_rast = DSM, dtm_rast = DEM, greenspace_rast = GreenSpace, 
-           max_distance = 200, observer_height = 1.7)
-#> memfrac   : 0.6
-#> tolerance : 0.1
-#> verbose   : FALSE
-#> todisk    : FALSE
-#> tempdir   : C:/Users/basti/AppData/Local/Temp/RtmpI7OI66
-#> datatype  : FLT4S
-#> memmin    : 1
-#> progress  : 3
-print(vs)
-#> [1] 0.7489548
+vgvi_sf <- vgvi(observers = observer, 
+                dsm_rast = DSM, dtm_rast = DEM, greenspace_rast = GreenSpace, 
+                max_distance = 200, observer_height = 1.7, mode = "exponential")
+vgvi_sf$VGVI
+#> [1] 0.6700769
 ```
+
+The output of ~0.67 indicates, that ~67% of the visible area, within a
+200 meters radius, is covered by greenspace.
+
+### 2. Road Network
+
+We also provide sample data of a SF LINESTRING feature, representing a
+road network. This feature represents roads and paths, that can be
+reached by walking within 5 minutes from our observer location.
+
+``` r
+# Download line feature and load as sf object
+isodistance <- read_sf("https://github.com/STBrinkmann/data/raw/main/GVI_Data/isoline.gpkg")
+```
+
+Compute the VGVI along the line feature. As the resolution of our DSM is
+5 meters, points along the line feature will be generated every 5
+meters, too.
+
+``` r
+vgvi_sf <- vgvi(observers = isodistance, 
+                dsm_rast = DSM, dtm_rast = DEM, greenspace_rast = GreenSpace, 
+                max_distance = 200, observer_height = 1.7, 
+                m = 1, b = 3, mode = "exponential", cores = 12)
+
+hist(vgvi_sf$VGVI)
+```
+
+![](docs/VGVI_histogram.png)
