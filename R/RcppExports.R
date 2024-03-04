@@ -13,3 +13,7 @@ VGVI_cpp <- function(dsm, dsm_values, greenspace, greenspace_values, x0, y0, h0,
     .Call(`_CGEI_VGVI_cpp`, dsm, dsm_values, greenspace, greenspace_values, x0, y0, h0, radius, fun, m, b, ncores, display_progress)
 }
 
+VVI_cpp <- function(dsm, dsm_values, x0, y0, h0, radius, ncores = 1L, display_progress = FALSE) {
+    .Call(`_CGEI_VVI_cpp`, dsm, dsm_values, x0, y0, h0, radius, ncores, display_progress)
+}
+
