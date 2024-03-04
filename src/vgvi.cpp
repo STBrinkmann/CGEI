@@ -27,7 +27,7 @@ std::vector<double> VGVI_cpp(Rcpp::S4 &dsm, const Rcpp::NumericVector &dsm_value
   // Cells from x0, y0
   Rcpp::IntegerVector x0_o = x0-1;
   Rcpp::IntegerVector y0_o = y0-1;
-  const Rcpp::IntegerVector input_cells = Rcpp::na_omit(cellFromColRowSensitive(dsm, x0_o, y0_o));
+  const Rcpp::IntegerVector input_cells = cellFromColRowSensitive(dsm, x0_o, y0_o);
   
   // Basic raster information
   const RasterInfo dsm_ras(dsm);
@@ -61,6 +61,12 @@ std::vector<double> VGVI_cpp(Rcpp::S4 &dsm, const Rcpp::NumericVector &dsm_value
       Progress::check_abort();
       
       const int this_input_cell = input_cells[k];
+      
+      // Check if this_input_cell is NA_INTEGER
+      if(Rcpp::IntegerVector::is_na(this_input_cell)){
+        pb.increment();
+        continue;
+      }
       
       // Viewshed
       std::vector<int> viewshed(nc_ref*nr_ref, NA_INTEGER);
