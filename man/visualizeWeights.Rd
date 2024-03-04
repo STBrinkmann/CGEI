@@ -4,7 +4,13 @@
 \alias{visualizeWeights}
 \title{Visualize Weights}
 \usage{
-visualizeWeights(x, m = 0.5, b = 8, mode = c("logit", "exponential"))
+visualizeWeights(
+  x,
+  m = 0.5,
+  b = 8,
+  mode = c("logit", "exponential"),
+  plot_engine = c("base", "ggplot2")
+)
 }
 \arguments{
 \item{x}{numeric or object of class \code{\link[terra]{rast}}; Either numeric, indicating the buffer distance or a \code{\link[terra]{rast}} of the \code{\link[GVI]{viewshed}} function.}
@@ -14,6 +20,8 @@ visualizeWeights(x, m = 0.5, b = 8, mode = c("logit", "exponential"))
 \item{b}{numeric; See ‘Details’.}
 
 \item{mode}{character; 'logit' or 'exponential'. See ‘Details’.}
+
+\item{plot_engine}{character; 'base' or 'ggplot2'.}
 }
 \description{
 Helper function to visualize the parameters used in the \code{\link[CGEI]{vgvi}} function.
