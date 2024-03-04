@@ -15,7 +15,6 @@
 #' @param b Parameter for the decay function, applicable if a decay function is selected. Default is 6.
 #' @param mode A character string specifying the type of decay function to apply to the visibility weights. Options are "none" (no decay), "exponential", or "logit". Default is "none".
 #' @param cores The number of cores to use for parallel processing. This parameter is relevant only if the function is set to run in parallel. Default is 1.
-#' @param folder_path optional; Folder path to where the output should be saved continuously. Must not inklude a filename extension (e.g. '.shp', '.gpkg').
 #' @param progress logical; Show progress bar and computation time?
 #'
 ##' @details 
@@ -49,7 +48,7 @@
 #' y_range <- bbox_observer[c("ymin", "ymax")]
 #' 
 #' # Create a raster with 1km x 1km around the observer
-#' dsm_rast <- rast(nrows=100, ncols=100,
+#' dsm_rast <- rast(res=100, 
 #'                  xmin=min(x_range)-1000, xmax=max(x_range) + 1000, 
 #'                  ymin=min(y_range)-1000, ymax=max(y_range) + 1000, 
 #'                  crs=crs(observer))
@@ -77,7 +76,7 @@ vgvi <- function(observer, dsm_rast, dtm_rast, greenspace_rast,
                  max_distance = 200, observer_height = 1.7, 
                  spacing = NULL,
                  m = 1, b = 6, mode = c("none", "exponential", "logit"),
-                 cores = 1L, folder_path = NULL, progress = FALSE) {
+                 cores = 1L, progress = FALSE) {
   #### 1. Check input ####
   # Check observer
   checkmate::assert(is(observer, "sf"), "observer must be an sf object")
@@ -123,49 +122,13 @@ vgvi <- function(observer, dsm_rast, dtm_rast, greenspace_rast,
                  exponential = 2,
                  none = 3)
   
-  # Check folder_path
-  if (!is.null(folder_path)) {
-    if (!dir.exists(folder_path)) {
-      dir.create(folder_path)
-    }
-    folder_path <- tempfile(pattern = "VGVI_", tmpdir = file.path(folder_path), fileext = ".gpkg")
-  }
-  
   
   #### 2. Convert observer to points
   if(progress) {
     message("Preprocessing:")
     pb = utils::txtProgressBar(min = 0, max = 5, initial = 0, style = 2)
   }
-  
-  if (as.character(sf::st_geometry_type(observer, by_geometry = FALSE)) %in% c("LINESTRING", "MULTILINESTRING")) {
-    sf_column <- attr(observer, "sf_column")
-    observer <- observer %>%
-      sf::st_union() %>% 
-      sf::st_cast("LINESTRING") %>%
-      sf::st_line_sample(density = 1/2)
-    
-    observer <- observer[!sf::st_is_empty(observer)] %>% 
-      sf::st_cast("POINT") %>% 
-      sf::st_as_sf() %>% 
-      sf::st_set_geometry(sf_column)
-    rm(sf_column)
-  } else if (as.character(sf::st_geometry_type(observer, by_geometry = FALSE)) %in% c("POLYGON", "MULTIPOLYGON")) {
-    sf_column <- attr(observer, "sf_column")
-    observer_bbox <- sf::st_bbox(observer)
-    observer <- terra::rast(xmin = observer_bbox[1], xmax = observer_bbox[3], 
-                            ymin = observer_bbox[2], ymax = observer_bbox[4], 
-                            crs = terra::crs(dsm_rast), resolution = spacing, vals = 0) %>% 
-      terra::crop(terra::vect(observer)) %>% 
-      terra::mask(terra::vect(observer)) %>%
-      terra::xyFromCell(which(terra::values(.) == 0)) %>%
-      as.data.frame() %>% 
-      sf::st_as_sf(coords = c("x","y"), crs = sf::st_crs(observer)) %>% 
-      sf::st_set_geometry(sf_column)
-    rm(observer_bbox, sf_column)
-  } else if (as.character(sf::st_geometry_type(observer, by_geometry = FALSE)) == "MULTIPOINT") {
-    observer <- sf::st_cast(observer, "POINT")
-  }
+  observer <- sf_to_POINT(observer)
   if (progress) utils::setTxtProgressBar(pb, 1)
   
   
@@ -243,7 +206,30 @@ vgvi <- function(observer, dsm_rast, dtm_rast, greenspace_rast,
   if (progress) {
     message(paste0("Computing VGVI for ", nrow(observer), ifelse(nrow(observer)>1, " points:", " point:")))
     start_time <- Sys.time()
+    
+    on.exit({
+      # Runtime statistics
+      time_dif <- round(cores * ((as.numeric(difftime(Sys.time(), start_time, units = "s"))*1000) / nrow(observer)), 2)
+      cat("\n")
+      
+      time_total <- round(as.numeric(difftime(Sys.time(), start_time, units = "m")))
+      if(time_total < 1){
+        time_total <- round(as.numeric(difftime(Sys.time(), start_time, units = "s")))
+        
+        if(time_total < 1){
+          time_total <- round(as.numeric(difftime(Sys.time(), start_time, units = "s")))*1000
+          message(paste("Total runtime:", time_total, " milliseconds"))
+        } else {
+          message(paste("Total runtime:", time_total, " seconds"))
+        }
+      } else {
+        message(paste("Total runtime:", time_total, " minutes"))
+      }
+      
+      message(paste("Average time for a single point:", time_dif, "milliseconds"))
+    })
   }
+      
   
   vgvi_values <- VGVI_cpp(dsm = dsm_cpp_rast, dsm_values = dsm_vec,
                           greenspace = greenspace_cpp_rast, greenspace_values = greenspace_vec,
@@ -252,32 +238,6 @@ vgvi <- function(observer, dsm_rast, dtm_rast, greenspace_rast,
   
   valid_values <- unlist(lapply(vgvi_values, is.numeric), use.names = FALSE)
   observer[["VGVI"]][valid_values] <- vgvi_values[valid_values]
-  
-  if (!is.null(folder_path)) {
-    sf::st_write(observer, folder_path, append = TRUE, quiet = TRUE)
-  }
-  
-  # Runtime statistics
-  if (progress) {
-    time_dif <- round(cores * ((as.numeric(difftime(Sys.time(), start_time, units = "s"))*1000) / nrow(observer)), 2)
-    cat("\n")
-    
-    time_total <- round(as.numeric(difftime(Sys.time(), start_time, units = "m")))
-    if(time_total < 1){
-      time_total <- round(as.numeric(difftime(Sys.time(), start_time, units = "s")))
-      
-      if(time_total < 1){
-        time_total <- round(as.numeric(difftime(Sys.time(), start_time, units = "s")))*1000
-        message(paste("Total runtime:", time_total, " milliseconds"))
-      } else {
-        message(paste("Total runtime:", time_total, " seconds"))
-      }
-    } else {
-      message(paste("Total runtime:", time_total, " minutes"))
-    }
-    
-    message(paste("Average time for a single point:", time_dif, "milliseconds"))
-  }
   
   return(observer)
 }
