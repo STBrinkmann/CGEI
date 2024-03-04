@@ -1,6 +1,6 @@
-#' Viewshed Greenness Visibility Index (VGVI)
+#' @title Viewshed Greenness Visibility Index (VGVI)
 #'
-#' @description The VGVI expresses the proportion of visible greenness to the total visible area based on a viewshed.
+#' @description The VGVI expresses the proportion of visible greenness to the total visible area based on a viewshed (\code{\link[CGEI]{viewshed_list}}).
 #' The estimated VGVI values range between 0 and 1, where 0 = no green cells are visible, and 1 = all of the visible cells are green.
 #' A distance decay function is applied, to account for the reducing visual prominence of an object in space with increasing distance from the observer.
 #'
@@ -19,7 +19,7 @@
 #'
 ##' @details 
 #' observer needs to be a geometry of type POINT, LINESTRING, MULTILINESTRING, POLYGON or MULTIPOLYGON. If observer is a LINESTRING or MULTILINESTRING, 
-#' points will be generated along the line(s) every "resolution" meters. If observer is a POLYGON or MULTIPOLYGON, a grid with resolution = "resolution" 
+#' points will be generated along the line(s) every "spacing" meters. If observer is a POLYGON or MULTIPOLYGON, a grid with resolution = "resolution" 
 #' will be generated, and VGVI will be computed for every point.
 #' The CRS (\code{\link[sf]{st_crs}}) needs to have a metric unit!
 #' 
@@ -128,7 +128,7 @@ vgvi <- function(observer, dsm_rast, dtm_rast, greenspace_rast,
     message("Preprocessing:")
     pb = utils::txtProgressBar(min = 0, max = 5, initial = 0, style = 2)
   }
-  observer <- sf_to_POINT(observer)
+  observer <- sf_to_POINT(observer, spacing, dsm_rast)
   if (progress) utils::setTxtProgressBar(pb, 1)
   
   

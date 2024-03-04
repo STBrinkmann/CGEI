@@ -1,6 +1,6 @@
-#' Viewshed Visibility Index (VVI) from sf
+#' @title Viewshed Visibility Index (VVI) from sf
 #' 
-#' @description The VVI expresses the proportion of visible area to the total area based on a viewshed.
+#' @description The VVI expresses the proportion of visible area to the total area based on a viewshed (\code{\link[CGEI]{viewshed_list}}).
 #' The estimated VVI values range between 0 and 1, where 0 = no cells within the buffer is visible, and 1 = all of the cells are visible.
 #'
 #' @param observer An `sf` object containing the observer locations. Each observer location should be a point geometry with a defined coordinate reference system (CRS).
@@ -15,7 +15,7 @@
 #'
 ##' @details 
 #' observer needs to be a geometry of type POINT, LINESTRING, MULTILINESTRING, POLYGON or MULTIPOLYGON. If observer is a LINESTRING or MULTILINESTRING, 
-#' points will be generated along the line(s) every "resolution" meters. If observer is a POLYGON or MULTIPOLYGON, a grid with resolution = "resolution" 
+#' points will be generated along the line(s) every "spacing" meters. If observer is a POLYGON or MULTIPOLYGON, a grid with resolution = "resolution" 
 #' will be generated, and VVI will be computed for every point.
 #' The CRS (\code{\link[sf]{st_crs}}) needs to have a metric unit!
 #' 
@@ -109,7 +109,7 @@ vvi <- function(observer, dsm_rast, dtm_rast,
     message("Preprocessing:")
     pb = utils::txtProgressBar(min = 0, max = 5, initial = 0, style = 2)
   }
-  observer <- sf_to_POINT(observer)
+  observer <- sf_to_POINT(observer, spacing, dsm_rast)
   
   if (progress) utils::setTxtProgressBar(pb, 1)
   
@@ -175,7 +175,7 @@ vvi <- function(observer, dsm_rast, dtm_rast,
   invisible(gc())
   
   
-  #### 7. Calculate viewsheds and VGVI ####
+  #### 7. Calculate viewsheds and VVI ####
   if (progress) {
     message(paste0("Computing VVI for ", nrow(observer), ifelse(nrow(observer)>1, " points:", " point:")))
     start_time <- Sys.time()
@@ -243,7 +243,7 @@ vvi <- function(observer, dsm_rast, dtm_rast,
 }
 
 # Helper function that converts SF to POINT
-sf_to_POINT <- function(x) {
+sf_to_POINT <- function(x, spacing, dsm_rast) {
   if (as.character(sf::st_geometry_type(x, by_geometry = FALSE)) %in% c("LINESTRING", "MULTILINESTRING")) {
     sf_column <- attr(x, "sf_column")
     x <- x %>%

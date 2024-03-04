@@ -12,6 +12,8 @@
 #' 
 #' @export
 #' @importFrom magrittr %>%
+#' @importFrom dplyr tibble
+#' @importFrom ggplot2 ggplot aes geom_line labs
 #' @importFrom sf st_coordinates
 #' @importFrom terra xyFromCell
 visualizeWeights <- function(x, m = 0.5, b = 8, mode = c("logit", "exponential"),
@@ -53,8 +55,8 @@ visualizeWeights <- function(x, m = 0.5, b = 8, mode = c("logit", "exponential")
       weight = logfun(seq(0, 1, length.out = max_dist)),
       d = 1:max_dist
     ) %>% 
-      ggplot(aes(x = d, y = weight)) +
-      geom_line() +
-      labs(x = "Distance [m]", y = "Decay Weight (d)", title = plot_main)
+      ggplot2::ggplot(ggplot2::aes(x = d, y = weight)) +
+      ggplot2::geom_line() +
+      ggplot2::labs(x = "Distance [m]", y = "Decay Weight (d)", title = plot_main)
   }
 }

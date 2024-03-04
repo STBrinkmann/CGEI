@@ -39,12 +39,12 @@ vvi(
 sf_object containing the weighted VGVI values as POINT features, where 0 = no green cells are visible, and 1 = all of the visible cells are green.
 }
 \description{
-The VVI expresses the proportion of visible area to the total area based on a viewshed.
+The VVI expresses the proportion of visible area to the total area based on a viewshed (\code{\link[CGEI]{viewshed_list}}).
 The estimated VVI values range between 0 and 1, where 0 = no cells within the buffer is visible, and 1 = all of the cells are visible.
 }
 \details{
 observer needs to be a geometry of type POINT, LINESTRING, MULTILINESTRING, POLYGON or MULTIPOLYGON. If observer is a LINESTRING or MULTILINESTRING, 
-points will be generated along the line(s) every "resolution" meters. If observer is a POLYGON or MULTIPOLYGON, a grid with resolution = "resolution" 
+points will be generated along the line(s) every "spacing" meters. If observer is a POLYGON or MULTIPOLYGON, a grid with resolution = "resolution" 
 will be generated, and VVI will be computed for every point.
 The CRS (\code{\link[sf]{st_crs}}) needs to have a metric unit!
 
