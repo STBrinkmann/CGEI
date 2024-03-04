@@ -16,7 +16,6 @@ vgvi(
   b = 6,
   mode = c("none", "exponential", "logit"),
   cores = 1L,
-  folder_path = NULL,
   progress = FALSE
 )
 }
@@ -42,8 +41,6 @@ vgvi(
 \item{mode}{A character string specifying the type of decay function to apply to the visibility weights. Options are "none" (no decay), "exponential", or "logit". Default is "none".}
 
 \item{cores}{The number of cores to use for parallel processing. This parameter is relevant only if the function is set to run in parallel. Default is 1.}
-
-\item{folder_path}{optional; Folder path to where the output should be saved continuously. Must not inklude a filename extension (e.g. '.shp', '.gpkg').}
 
 \item{progress}{logical; Show progress bar and computation time?}
 }
@@ -84,7 +81,7 @@ x_range <- bbox_observer[c("xmin", "xmax")]
 y_range <- bbox_observer[c("ymin", "ymax")]
 
 # Create a raster with 1km x 1km around the observer
-dsm_rast <- rast(nrows=100, ncols=100,
+dsm_rast <- rast(res=100, 
                  xmin=min(x_range)-1000, xmax=max(x_range) + 1000, 
                  ymin=min(y_range)-1000, ymax=max(y_range) + 1000, 
                  crs=crs(observer))
