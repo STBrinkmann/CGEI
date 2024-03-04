@@ -147,18 +147,18 @@ Compute the VGVI along the line feature. As the resolution of our DSM is 5 meter
 ```{r message=FALSE, warning=FALSE}
 vgvi_sf <- vgvi(observer = isodistance, 
                 dsm_rast = DSM, dtm_rast = DEM, greenspace_rast = GreenSpace, 
-                max_distance = 200, observer_height = 1.7, 
+                max_distance = 200, observer_height = 1.7, spacing = 2,
                 m = 1, b = 3, mode = "exponential", cores = 12)
 ```
 
 The plot below shows the VGVI along the line feature. Yellow has a high VGVI, while blue has a low VGVI. The VGVI is highest in parks and lowest in urban center in the east.
-```{r fig.height=4, fig.width=6, message=FALSE, warning=FALSE, echo=FALSE}
+```{r fig.height=6, fig.width=7, message=FALSE, warning=FALSE, echo=FALSE}
 slope <- terrain(DSM, "slope", unit="radians")
 aspect <- terrain(DSM, "aspect", unit="radians")
 hill <- shade(slope, aspect, 40, 270)
 
-plot(hill, col=grey(0:100/100), legend=FALSE, mar=c(2,2,1,4))
+plot(hill, col=grey(0:100/100), legend=FALSE)
 plot(DSM, col=terrain.colors(100, alpha = 0.35), add=TRUE, legend=FALSE)
-plot(vgvi_sf, add=TRUE, pch=16, cex = 0.7, col="black")
-plot(vgvi_sf, add=TRUE, pch=16, cex = 0.5, col=hcl.colors(nrow(vgvi_sf), alpha = 0.8, rev = TRUE))
+plot(vgvi_sf, add=TRUE, pch=16, cex = 0.5, col="white")
+plot(vgvi_sf, add=TRUE, pch=16, cex = 0.4, fill=hcl.colors(nrow(vgvi_sf), alpha = 0.8, rev = TRUE))
 ```
