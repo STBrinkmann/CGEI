@@ -3,6 +3,7 @@
 export(lacunarity)
 export(vgvi)
 export(visualizeWeights)
+export(vvi)
 importFrom(Rcpp,evalCpp)
 importFrom(Rcpp,sourceCpp)
 importFrom(checkmate,assert)
