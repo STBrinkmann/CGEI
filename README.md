@@ -65,44 +65,85 @@ download.file(url = "https://github.com/STBrinkmann/data/raw/main/GVI_Data/GVI_D
 GS_tmp <- tempfile(fileext = ".tif")
 download.file(url = "https://github.com/STBrinkmann/data/raw/main/GVI_Data/GVI_GreenSpace.tif",
               destfile = GS_tmp, mode="wb")
-```
 
-Load DSM, DEM and Greenspace Mask, and generate the observer location as
-a `sf` `POINT` feature.
+# Download hoechstetter
+hoechstetter_tmp <- tempfile(fileext = ".tif")
+download.file(url = "https://github.com/STBrinkmann/data/raw/main/GVI_Data/hoechstetter.tif",
+              destfile = hoechstetter_tmp, mode="wb")
+```
 
 ``` r
 # Load libraries. if one is not installed, use the "install.packages()" function
 library(terra)
 library(sf)
 library(sfheaders)
+library(CGEI)
 
 # Load raster objects
 GreenSpace <- rast(GS_tmp)
-DEM <- DEM_tmp %>% rast() %>% resample(GreenSpace)
-DSM <- DSM_tmp %>% rast() %>% resample(GreenSpace)
-
-# Generate single observer point
-observer <- st_sf(sf_point(c(492243.3, 5454231.4)), crs = st_crs(26910))
+DEM <- rast(DEM_tmp)
+DSM <- rast(DSM_tmp)
+hoechstetter <- rast(hoechstetter_tmp)
 ```
 
-### 1. Single Point
+### Viewshed Greenness Visibility Index (VGVI)
 
-Calculate the VGVI for a 200 meters radius around the observers position
-at 1.7 meters height (eye level).
+The VGVI expresses the proportion of visible greenness to the total
+visible area based on a viewshed. The estimated VGVI values range
+between 0 and 1, where 0 = no green cells are visible, and 1 = all of
+the visible cells are green.
+
+Based on a viewshed and a binary greenspace raster, all visible points
+are classified as visible green and visible no-green. All values are
+summarized using a decay function, to account for the reducing visual
+prominence of an object in space with increasing distance from the
+observer. Currently two options are supported, a logistic and an
+exponential function.
+
+$$\begin{align*} f(x) = \cfrac{1}{1 + e^{b(x-m)}} && \text{(logistic)}\\ f(x) = \cfrac{1}{1 + (bx^{m})} && \text{(exponential)} \end{align*} $$
+
+The full algorithm has been described in [Brinkmann et
+al. (2022)](https://doi.org/10.5194/agile-giss-3-27-2022).
+
+The `visualizeWeights` function helps to adjust spatial weight
+parameters *m* and *b* used in the `vgvi` and `vgvi_from_sf` functions.
+<img src="man/figures/README-unnamed-chunk-4-1.png" width="100%" />
+
+*Example output of the* `visualizeWeight` *function to compare and
+parameterize the decay weights of a logistic (left) and an exponential
+(right) function.*
+
+#### 1. Single Point
+
+Calculate the viewshed for a 200 meters radius around the observers
+position at 1.7 meters height (eye level).
 
 ``` r
-library(CGEI)
-vgvi_sf <- vgvi(observers = observer, 
-                dsm_rast = DSM, dtm_rast = DEM, greenspace_rast = GreenSpace, 
-                max_distance = 200, observer_height = 1.7, mode = "exponential")
-vgvi_sf$VGVI
-#> [1] 0.6700769
+# Generate single observer point
+observer <- st_sf(sf_point(c(492243.3, 5454231.4)), crs = st_crs(26910))
+vs <- viewshed_list(observer = observer, dsm_rast = DSM, dtm_rast = DEM, 
+                    max_distance = 200, observer_height = 1.7)
 ```
 
-The output of ~0.67 indicates, that ~67% of the visible area, within a
+<img src="man/figures/README-unnamed-chunk-6-1.png" width="100%" />
+
+*Left: Digital Surface Model (DSM); Right: Viewshed, where green =
+visible and yellow = no-visible area.*
+
+The VGVI can now be calculated using the `vgvi` function.
+
+``` r
+vgvi_sf <- vgvi(observer = observer, 
+                dsm_rast = DSM, dtm_rast = DEM, greenspace_rast = GreenSpace, 
+                max_distance = 200, observer_height = 1.7)
+vgvi_sf$VGVI
+#> [1] 0.6134167
+```
+
+The output of ~0.61 indicates, that ~61% of the visible area, within a
 200 meters radius, is covered by greenspace.
 
-### 2. Road Network
+#### 2. Road Network
 
 We also provide sample data of a SF LINESTRING feature, representing a
 road network. This feature represents roads and paths, that can be
@@ -118,12 +159,13 @@ Compute the VGVI along the line feature. As the resolution of our DSM is
 meters, too.
 
 ``` r
-vgvi_sf <- vgvi(observers = isodistance, 
+vgvi_sf <- vgvi(observer = isodistance, 
                 dsm_rast = DSM, dtm_rast = DEM, greenspace_rast = GreenSpace, 
-                max_distance = 200, observer_height = 1.7, 
+                max_distance = 200, observer_height = 1.7, spacing = 2,
                 m = 1, b = 3, mode = "exponential", cores = 12)
-
-hist(vgvi_sf$VGVI)
 ```
 
-![](docs/VGVI_histogram.png)
+The plot below shows the VGVI along the line feature. Yellow has a high
+VGVI, while blue has a low VGVI. The VGVI is highest in parks and lowest
+in urban center in the east.
+<img src="man/figures/README-unnamed-chunk-10-1.png" width="100%" />
