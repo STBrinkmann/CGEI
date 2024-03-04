@@ -17,12 +17,10 @@ using namespace Rcpp;
 #include "eta_progress_bar.h"
 
 // [[Rcpp::export]]
-std::vector<double> VGVI_cpp(Rcpp::S4 &dsm, const Rcpp::NumericVector &dsm_values,
-                             Rcpp::S4 &greenspace, const Rcpp::NumericVector &greenspace_values,
-                             const Rcpp::IntegerVector &x0, const Rcpp::IntegerVector &y0,
-                             const Rcpp::NumericVector &h0, const int radius,
-                             const int fun, const double m, const double b,
-                             const int ncores=1, const bool display_progress=false)
+Rcpp::List VVI_cpp(Rcpp::S4 &dsm, const Rcpp::NumericVector &dsm_values,
+                   const Rcpp::IntegerVector &x0, const Rcpp::IntegerVector &y0,
+                   const Rcpp::NumericVector &h0, const int radius,
+                   const int ncores=1, const bool display_progress=false)
 {
   // Cells from x0, y0
   Rcpp::IntegerVector x0_o = x0-1;
@@ -31,7 +29,6 @@ std::vector<double> VGVI_cpp(Rcpp::S4 &dsm, const Rcpp::NumericVector &dsm_value
   
   // Basic raster information
   const RasterInfo dsm_ras(dsm);
-  const RasterInfo gs_ras(greenspace);
   
   // Parameters
   const int r = (int)round(radius/dsm_ras.res);
@@ -39,8 +36,9 @@ std::vector<double> VGVI_cpp(Rcpp::S4 &dsm, const Rcpp::NumericVector &dsm_value
   const int x0_ref = r, y0_ref = x0_ref;
   const int c0_ref = y0_ref*nc_ref + x0_ref;
   
-  // Output vector
-  std::vector<double> output(input_cells.size(), NA_REAL);
+  // Pre-results
+  std::vector<std::vector<int>> allViewsheds(input_cells.size());
+  std::vector<std::set<int>> allSeenCells(input_cells.size());
   
   // Protoptype of Line of Sight (LoS) paths:
   // Will be used as a reference for all input points
@@ -54,7 +52,7 @@ std::vector<double> VGVI_cpp(Rcpp::S4 &dsm, const Rcpp::NumericVector &dsm_value
   // Main loop
 #if defined(_OPENMP)
   omp_set_num_threads(ncores);
-#pragma omp parallel for schedule(dynamic) shared(output)
+#pragma omp parallel for schedule(dynamic)
 #endif
   for(int k = 0; k < input_cells.size(); ++k){
     if ( !pb.is_aborted() ) {
@@ -74,9 +72,12 @@ std::vector<double> VGVI_cpp(Rcpp::S4 &dsm, const Rcpp::NumericVector &dsm_value
       // Viewshed at x0/y0 is always visible
       viewshed[c0_ref] = input_cells[k]+1;
       
+      std::set<int> seenCells; // Set for storing unique cells within the viewshed
+      seenCells.insert(input_cells[k]+1);
+      
       // A: Viewshed Analysis
       // Eye-level height at x0/y0 > DSM height?
-      if(h0[k] > dsm_values[this_input_cell]){
+      if(true){ // h0[k] > dsm_values[this_input_cell]
         
         // Parameter for projecting reference cell to true cell values
         const int x = this_input_cell - c0_ref - r*(dsm_ras.ncol-nc_ref);
@@ -117,10 +118,13 @@ std::vector<double> VGVI_cpp(Rcpp::S4 &dsm, const Rcpp::NumericVector &dsm_value
                 const double this_tan = (h_cell - h0[k]) / (distance_traveled);
                 
                 // Update viewshed and max tangent
-                if(this_tan > max_tan){
+                if(this_tan > max_tan && h0[k] > dsm_values[this_input_cell]){
                   max_tan = this_tan;
                   viewshed[los_ref_cell] = cell+1;
                 }
+                
+                // Insert cell into set
+                seenCells.insert(cell+1);
               }
               
               max_tan_vec[j] = max_tan;
@@ -131,109 +135,27 @@ std::vector<double> VGVI_cpp(Rcpp::S4 &dsm, const Rcpp::NumericVector &dsm_value
         }
       }
       
-      
       viewshed.erase(std::remove_if(std::begin(viewshed),
                                     std::end(viewshed),
                                     [](const int& value) { return Rcpp::IntegerVector::is_na(value); }),
                                     std::end(viewshed));
       
+      // Directly store results in pre-allocated vectors
+      allViewsheds[k] = viewshed;
+      allSeenCells[k] = seenCells;
       
-      // B: Greenspace Visibility Index
-      const int cs = viewshed.size();
-      
-      // Get XY coordinates of visible cells
-      const std::vector<std::vector<double>> dsm_xy = xyFromCell(dsm_ras, viewshed);
-      const std::vector<std::vector<double>> xy0 = xyFromCell(dsm_ras, input_cells[k]);
-      
-      // Calculate distance
-      std::vector<int> dxy(cs);
-      for(int i = 0; i < cs; i++){
-        double d = sqrt( ((xy0[0][0] - dsm_xy[i][0])*(xy0[0][0] - dsm_xy[i][0])) + ((xy0[0][1] - dsm_xy[i][1])*(xy0[0][1] - dsm_xy[i][1])) );
-        int di = round(d);
-        if(di < 1) {
-          dxy[i] = 1;
-        } else {
-          dxy[i] = di;
-        }
-      }
-      
-      // Intersect XY with greenspace mask
-      std::vector<int> greenspace_cells = cellFromXY(gs_ras, dsm_xy);
-      std::vector<double> greenspace_cell_values(cs, 0.0);
-      for(int i = 0; i < cs; i++){
-        int gs_cell = greenspace_cells[i]; 
-        if(!Rcpp::IntegerVector::is_na(gs_cell)){
-          double gs = greenspace_values[gs_cell];
-          greenspace_cell_values[i] =  Rcpp::NumericVector::is_na(gs) ? 0.0 : gs;
-        }
-      }
-      
-      // Get number of green visible cells and total visible cells per distance
-      const double max_d = *std::max_element(dxy.begin(), dxy.end()) + 0.0;
-      
-      std::vector<int> dxy_seq(max_d);
-      std::iota(dxy_seq.begin(), dxy_seq.end(), 1);
-      
-      const int n = dxy_seq.size();
-      
-      std::vector<int> visibleTotal(n);
-      std::vector<int> visibleGreen(n);
-      
-      for(int i = 0; i < cs; i++){
-        int this_dxy = (int)dxy[i];
-        visibleTotal[this_dxy-1] += 1;
-        visibleGreen[this_dxy-1] += greenspace_cell_values[i];
-      }
-      for(int i = 0; i < n; i++){
-        if(visibleTotal[i] == 0){
-          visibleTotal[i] = 1;
-        }
-      }
-      
-      // Proportion of visible green cells
-      if(max_d == 1.0){
-        output[k] = visibleGreen[0]/visibleTotal[0];
-        continue;
-      }
-      std::vector<double> raw_GVI(n);
-      for(int i = 0; i < n; i++){
-        // Rcpp::Rcout << i << ": " << visibleGreen[i] << " / " << visibleTotal[i] << std::endl;
-        raw_GVI[i] = (double)visibleGreen[i] / visibleTotal[i];
-      }
-      
-      // If fun == 3, simply return the unweighted mean GVI
-      if(fun == 3){
-        const double mean_GVI = std::accumulate(raw_GVI.begin(), raw_GVI.end(), 0.0) / n;
-        output[k] = mean_GVI;
-        continue;
-      }
-      
-      // Normalize distance
-      std::vector<double> nDxy(n);
-      for(int i = 0; i < n; i++){
-        nDxy[i] = dxy_seq[i] / (double)radius;
-      }
-      
-      // Calculate weights by taking the proportion of the integral
-      // of each step from the integral of the whole area
-      const double min_dist = *std::min_element(nDxy.begin(), nDxy.end());
-      std::vector<double> decayWeights(n);
-      for(int i = 0; i < n; i++){
-        double d = nDxy[i];
-        decayWeights[i] = integrate(d-min_dist, d, 300, fun, m, b);
-      }
-      const double big_integral = std::accumulate(decayWeights.begin(), decayWeights.end(), 0.0);
-      
-      
-      // Proportion of visible green
-      double vgvi_sum = 0.0; 
-      for(int i = 0; i < n; i++){
-        vgvi_sum += raw_GVI[i] * (decayWeights[i]/big_integral);
-      }
-      
-      output[k] = vgvi_sum;
       pb.increment();
     }
+  }
+  
+  // Create the output list outside of the parallel region
+  Rcpp::List output(input_cells.size());
+  for(int i = 0; i < input_cells.size(); ++i){
+    Rcpp::List observationResult = Rcpp::List::create(
+      Rcpp::Named("visible_cells") = Rcpp::wrap(allViewsheds[i]),
+      Rcpp::Named("viewshed") = Rcpp::wrap(std::vector<int>(allSeenCells[i].begin(), allSeenCells[i].end()))
+    );
+    output[i] = observationResult;
   }
   
   return output;

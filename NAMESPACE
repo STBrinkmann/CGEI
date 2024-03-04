@@ -2,7 +2,9 @@
 
 export(lacunarity)
 export(vgvi)
+export(viewshed_list)
 export(visualizeWeights)
+export(vvi)
 importFrom(Rcpp,evalCpp)
 importFrom(Rcpp,sourceCpp)
 importFrom(checkmate,assert)

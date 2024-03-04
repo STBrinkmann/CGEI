@@ -1,31 +1,28 @@
-#' @title Viewshed Greenness Visibility Index (VGVI)
-#'
-#' @description The VGVI expresses the proportion of visible greenness to the total visible area based on a viewshed (\code{\link[CGEI]{viewshed_list}}).
-#' The estimated VGVI values range between 0 and 1, where 0 = no green cells are visible, and 1 = all of the visible cells are green.
-#' A distance decay function is applied, to account for the reducing visual prominence of an object in space with increasing distance from the observer.
+#' @title Viewshed Visibility Index (VVI) from sf
+#' 
+#' @description The VVI expresses the proportion of visible area to the total area based on a viewshed (\code{\link[CGEI]{viewshed_list}}).
+#' The estimated VVI values range between 0 and 1, where 0 = no cells within the buffer is visible, and 1 = all of the cells are visible.
 #'
 #' @param observer An `sf` object containing the observer locations. Each observer location should be a point geometry with a defined coordinate reference system (CRS).
 #' @param dsm_rast A `SpatRaster` object representing the Digital Surface Model (DSM) of the area, indicating the elevation of surface objects including vegetation, buildings, and other features.
 #' @param dtm_rast A `SpatRaster` object representing the Digital Terrain Model (DTM) of the area, indicating the elevation of the ground surface without any objects.
-#' @param greenspace_rast A `SpatRaster` object representing the greenspace within the area. Greenspaces are indicated by a value of 1, and non-greenspaces by a value of 0.
 #' @param max_distance The maximum distance (in meters) from the observer location within which the greenspace visibility is calculated. Default is 200 meters.
 #' @param observer_height The height (in meters) of the observer above the ground level. Default is 1.7 meters.
 #' @param spacing optional; numeric > 0; Only if \code{observer} is a LINESTRING or POLYGON. Points on the line will be generated. The \code{spacing} parameter sets the distance in between the points on the line/grid. Defaults to the resolution of the \code{dsm_rast}.
-#' @param m Parameter for the decay function, applicable if a decay function is selected. Default is 1.
-#' @param b Parameter for the decay function, applicable if a decay function is selected. Default is 6.
-#' @param mode A character string specifying the type of decay function to apply to the visibility weights. Options are "none" (no decay), "exponential", or "logit". Default is "none".
+#' @param mode A character string specifying the type of decay function to apply to the visibility weights. Options are "VVI", or "viewshed". Default is "VVI".
 #' @param cores The number of cores to use for parallel processing. This parameter is relevant only if the function is set to run in parallel. Default is 1.
 #' @param progress logical; Show progress bar and computation time?
 #'
 ##' @details 
 #' observer needs to be a geometry of type POINT, LINESTRING, MULTILINESTRING, POLYGON or MULTIPOLYGON. If observer is a LINESTRING or MULTILINESTRING, 
 #' points will be generated along the line(s) every "spacing" meters. If observer is a POLYGON or MULTIPOLYGON, a grid with resolution = "resolution" 
-#' will be generated, and VGVI will be computed for every point.
+#' will be generated, and VVI will be computed for every point.
 #' The CRS (\code{\link[sf]{st_crs}}) needs to have a metric unit!
 #' 
-#' The type of function, used for calculating the distance decay weights, can be defined with the \code{mode} parameter.
-#' The argument 'logit' uses the logistic function, d = 1 / (1 + e^(b * (x - m))) and 'exponential' the exponential function d = 1 / (1 + (b * x^m)).
-#' The decay function can be visualized using the \code{\link[CGEI]{visualizeWeights}} function.
+#' If \code{mode = "VVI"}, an sf_object containing the VVI values as POINT features, where 0 = no visible cells, and 1 = all of the cells are visible.
+#' When mode is set to \code{viewshed}, the function outputs a SpatRaster with two layers derived from dsm_rast:
+#' 1. \code{n_views}: Counts how many times each cell is visible across all viewsheds. This layer identifies cells with high visibility across the landscape.
+#' 2. \code{view_per_viewshed}: Calculates the ratio of the number of viewsheds in which a cell is visible to the total number of potential viewsheds for that cell. This value, ranging between 0 and 1, indicates the proportion of potential observation points from which the cell is visible, providing a normalized measure of visibility.
 #'
 #' @return sf_object containing the weighted VGVI values as POINT features, where 0 = no green cells are visible, and 1 = all of the visible cells are green.
 #'
@@ -48,7 +45,7 @@
 #' y_range <- bbox_observer[c("ymin", "ymax")]
 #' 
 #' # Create a raster with 1km x 1km around the observer
-#' dsm_rast <- rast(res=100, 
+#' dsm_rast <- rast(res=100,
 #'                  xmin=min(x_range)-1000, xmax=max(x_range) + 1000, 
 #'                  ymin=min(y_range)-1000, ymax=max(y_range) + 1000, 
 #'                  crs=crs(observer))
@@ -56,12 +53,8 @@
 #' 
 #' dtm_rast <- rast(dsm_rast, vals=0) # Flat terrain
 #' 
-#' greenspace_rast <- rast(dsm_rast)
-#' values(greenspace_rast) <- sample(0:1, ncell(dsm_rast), replace=TRUE)
-#' 
 #' # Calculate VGVI
-#' vgvi_results <- vgvi(observer, dsm_rast, dtm_rast, greenspace_rast)
-#' print(vgvi_results)
+#' vvi_results <- vvi(observer, dsm_rast, dtm_rast)
 #' }
 #'
 #' @export
@@ -72,11 +65,10 @@
 #' @importFrom raster raster
 #' @importFrom checkmate assert
 #' @importFrom utils txtProgressBar setTxtProgressBar
-vgvi <- function(observer, dsm_rast, dtm_rast, greenspace_rast,
-                 max_distance = 200, observer_height = 1.7, 
-                 spacing = NULL,
-                 m = 1, b = 6, mode = c("none", "exponential", "logit"),
-                 cores = 1L, progress = FALSE) {
+vvi <- function(observer, dsm_rast, dtm_rast,
+                max_distance = 200, observer_height = 1.7, 
+                spacing = NULL, mode = c("VVI", "viewshed"), 
+                cores = 1L, progress = FALSE) {
   #### 1. Check input ####
   # Check observer
   checkmate::assert(is(observer, "sf"), "observer must be an sf object")
@@ -85,7 +77,6 @@ vgvi <- function(observer, dsm_rast, dtm_rast, greenspace_rast,
   # Check rasters
   checkmate::assert(inherits(dsm_rast, "SpatRaster"), "dsm_rast must be a SpatRast object")
   checkmate::assert(inherits(dtm_rast, "SpatRaster"), "dtm_rast must be a SpatRast object")
-  checkmate::assert(inherits(greenspace_rast, "SpatRaster"), "greenspace_rast must be a SpatRast object")
   
   # Check that the rasters have the same resolution
   checkmate::assert(length(unique(terra::res(dsm_rast))) == 1, "dsm_rast: x and y resolution must be equal")
@@ -93,7 +84,6 @@ vgvi <- function(observer, dsm_rast, dtm_rast, greenspace_rast,
   
   # Check crs
   checkmate::assert(identical(sf::st_crs(observer)$proj4string, terra::crs(dtm_rast, proj = TRUE)), "dsm_rast and dtm_rast must have the same crs")
-  checkmate::assert(identical(sf::st_crs(observer)$proj4string, terra::crs(greenspace_rast, proj = TRUE)), "dsm_rast and greenspace_rast must have the same crs")
   checkmate::assert(identical(sf::st_crs(observer)$proj4string, terra::crs(dsm_rast, proj = TRUE)), "dsm_rast and observer must have the same crs")
   
   # Check max_distance
@@ -101,27 +91,18 @@ vgvi <- function(observer, dsm_rast, dtm_rast, greenspace_rast,
   checkmate::assert(max_distance > 0, "max_distance must be greater than 0")
   max_distance <- round(max_distance, digits = 0)
   
+  # Check observer_height
+  checkmate::assert(methods::is(observer_height, "numeric"), "observer_height must be a numeric")
+  checkmate::assert(observer_height > 0, "observer_height must be greater than 0")
+  
   # Check spacing
   checkmate::assert(methods::is(spacing, "numeric") | is.null(spacing), "spacing must be a numeric or NULL")
   if(is.null(spacing)) {
     spacing <- terra::res(dsm_rast)[1]
   }
-  
-  # Check observer_height
-  checkmate::assert(methods::is(observer_height, "numeric"), "observer_height must be a numeric")
-  checkmate::assert(observer_height > 0, "observer_height must be greater than 0")
-  
-  # Check m and b
-  checkmate::assert(methods::is(m, "numeric"), "m must be a numeric")
-  checkmate::assert(methods::is(b, "numeric"), "b must be a numeric")
-  
+
   # Check mode
-  mode <- match.arg(mode, c("none", "exponential", "logit"))
-  mode <- switch(mode,
-                 logit = 1,
-                 exponential = 2,
-                 none = 3)
-  
+  mode <- match.arg(mode, c("VVI", "viewshed"))
   
   #### 2. Convert observer to points
   if(progress) {
@@ -129,6 +110,7 @@ vgvi <- function(observer, dsm_rast, dtm_rast, greenspace_rast,
     pb = utils::txtProgressBar(min = 0, max = 5, initial = 0, style = 2)
   }
   observer <- sf_to_POINT(observer, spacing, dsm_rast)
+  
   if (progress) utils::setTxtProgressBar(pb, 1)
   
   
@@ -141,13 +123,8 @@ vgvi <- function(observer, dsm_rast, dtm_rast, greenspace_rast,
   
   # Crop DSM to max AOI
   dsm_rast <- terra::crop(dsm_rast, terra::vect(max_aoi))
-  greenspace_rast <- terra::crop(greenspace_rast, terra::vect(max_aoi))
-  
   dsm_vec <- terra::values(dsm_rast, mat = FALSE)
-  greenspace_vec <- terra::values(greenspace_rast, mat = FALSE)
-  
   dsm_cpp_rast <- dsm_rast %>% terra::rast() %>% raster::raster()
-  greenspace_cpp_rast <- greenspace_rast %>% terra::rast() %>% raster::raster()
   
   # Coordinates of start point
   x0 <- sf::st_coordinates(observer)[,1]
@@ -177,10 +154,6 @@ vgvi <- function(observer, dsm_rast, dtm_rast, greenspace_rast,
   
   
   #### 5. Last steps of PreProcessing ####
-  # Prepare observer for output
-  observer <- observer %>% 
-    dplyr::mutate(VGVI = as.numeric(NA)) %>% 
-    dplyr::select(VGVI, dplyr::everything())
   
   # convert x0/y0 to col/row
   c0 <- terra::colFromX(dsm_rast, x0)
@@ -202,9 +175,9 @@ vgvi <- function(observer, dsm_rast, dtm_rast, greenspace_rast,
   invisible(gc())
   
   
-  #### 7. Calculate viewsheds and VGVI ####
+  #### 7. Calculate viewsheds and VVI ####
   if (progress) {
-    message(paste0("Computing VGVI for ", nrow(observer), ifelse(nrow(observer)>1, " points:", " point:")))
+    message(paste0("Computing VVI for ", nrow(observer), ifelse(nrow(observer)>1, " points:", " point:")))
     start_time <- Sys.time()
     
     on.exit({
@@ -229,15 +202,76 @@ vgvi <- function(observer, dsm_rast, dtm_rast, greenspace_rast,
       message(paste("Average time for a single point:", time_dif, "milliseconds"))
     })
   }
-      
+
+  vvi_list <- VVI_cpp(dsm = dsm_cpp_rast, dsm_values = dsm_vec,
+                      x0 = c0, y0 = r0, radius = max_distance, h0 = height_0_vec,
+                      ncores = cores, display_progress = progress)
   
-  vgvi_values <- VGVI_cpp(dsm = dsm_cpp_rast, dsm_values = dsm_vec,
-                          greenspace = greenspace_cpp_rast, greenspace_values = greenspace_vec,
-                          x0 = c0, y0 = r0, radius = max_distance, h0 = height_0_vec,
-                          fun = mode, m = m, b = b, ncores = cores, display_progress = progress)
+  if(mode == "VVI") {
+    visible_cells <- unlist(sapply(vvi_list, function(vvi) {
+      length(vvi$visible_cells)
+    }))
+    viewshed <- unlist(sapply(vvi_list, function(vvi) {
+      length(vvi$viewshed)
+    }))
+    vvi <- visible_cells/viewshed
+    
+    
+    observer <- observer %>% 
+      dplyr::mutate(VVI = vvi,
+                    n_visible_cells = visible_cells,
+                    n_total_cells = viewshed) %>% 
+      dplyr::select(VVI, n_visible_cells, n_total_cells, dplyr::everything())
+    return(observer)
+  } else if(mode == "viewshed") {
+    viewshed_cells <- unlist(sapply(vvi_list, function(vvi) {
+      vvi$viewshed
+    }))
+    visible_cells <- unlist(sapply(vvi_list, function(vvi) {
+      vvi$visible_cells
+    }))
+    
+    viewshed_count <- tabulate(viewshed_cells, nbins = terra::ncell(dsm_rast))
+    visible_count <- tabulate(visible_cells, nbins = terra::ncell(dsm_rast))
+    
+    output <- terra::rast(dsm_rast)
+    output$n_views <- visible_count
+    output[[1]][is.na(visible_count / viewshed_count)] <- NA
+    output$view_per_viewshed <- visible_count / viewshed_count
+    return(output)
+  }
+}
+
+# Helper function that converts SF to POINT
+sf_to_POINT <- function(x, spacing, dsm_rast) {
+  if (as.character(sf::st_geometry_type(x, by_geometry = FALSE)) %in% c("LINESTRING", "MULTILINESTRING")) {
+    sf_column <- attr(x, "sf_column")
+    x <- x %>%
+      sf::st_union() %>% 
+      sf::st_cast("LINESTRING") %>%
+      sf::st_line_sample(density = 1/spacing)
+    
+    x <- x[!sf::st_is_empty(x)] %>% 
+      sf::st_cast("POINT") %>% 
+      sf::st_as_sf() %>% 
+      sf::st_set_geometry(sf_column)
+    rm(sf_column)
+  } else if (as.character(sf::st_geometry_type(x, by_geometry = FALSE)) %in% c("POLYGON", "MULTIPOLYGON")) {
+    sf_column <- attr(x, "sf_column")
+    x_bbox <- sf::st_bbox(x)
+    x <- terra::rast(xmin = x_bbox[1], xmax = x_bbox[3], 
+                            ymin = x_bbox[2], ymax = x_bbox[4], 
+                            crs = terra::crs(dsm_rast), resolution = spacing, vals = 0) %>% 
+      terra::crop(terra::vect(x)) %>% 
+      terra::mask(terra::vect(x)) %>%
+      terra::xyFromCell(which(terra::values(.) == 0)) %>%
+      as.data.frame() %>% 
+      sf::st_as_sf(coords = c("x","y"), crs = sf::st_crs(x)) %>% 
+      sf::st_set_geometry(sf_column)
+    rm(x_bbox, sf_column)
+  } else if (as.character(sf::st_geometry_type(x, by_geometry = FALSE)) == "MULTIPOINT") {
+    observer <- sf::st_cast(x, "POINT")
+  }
   
-  valid_values <- unlist(lapply(vgvi_values, is.numeric), use.names = FALSE)
-  observer[["VGVI"]][valid_values] <- vgvi_values[valid_values]
-  
-  return(observer)
+  return(x)
 }
