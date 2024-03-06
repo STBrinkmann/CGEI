@@ -10,6 +10,27 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// IDW_cpp
+NumericVector IDW_cpp(S4& rast, const NumericVector& x, const NumericVector& sf_x, const NumericVector& sf_y, const NumericVector& sf_z, const size_t n, const double b, const double radius, const bool na_only, const int ncores, const bool display_progress);
+RcppExport SEXP _CGEI_IDW_cpp(SEXP rastSEXP, SEXP xSEXP, SEXP sf_xSEXP, SEXP sf_ySEXP, SEXP sf_zSEXP, SEXP nSEXP, SEXP bSEXP, SEXP radiusSEXP, SEXP na_onlySEXP, SEXP ncoresSEXP, SEXP display_progressSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< S4& >::type rast(rastSEXP);
+    Rcpp::traits::input_parameter< const NumericVector& >::type x(xSEXP);
+    Rcpp::traits::input_parameter< const NumericVector& >::type sf_x(sf_xSEXP);
+    Rcpp::traits::input_parameter< const NumericVector& >::type sf_y(sf_ySEXP);
+    Rcpp::traits::input_parameter< const NumericVector& >::type sf_z(sf_zSEXP);
+    Rcpp::traits::input_parameter< const size_t >::type n(nSEXP);
+    Rcpp::traits::input_parameter< const double >::type b(bSEXP);
+    Rcpp::traits::input_parameter< const double >::type radius(radiusSEXP);
+    Rcpp::traits::input_parameter< const bool >::type na_only(na_onlySEXP);
+    Rcpp::traits::input_parameter< const int >::type ncores(ncoresSEXP);
+    Rcpp::traits::input_parameter< const bool >::type display_progress(display_progressSEXP);
+    rcpp_result_gen = Rcpp::wrap(IDW_cpp(rast, x, sf_x, sf_y, sf_z, n, b, radius, na_only, ncores, display_progress));
+    return rcpp_result_gen;
+END_RCPP
+}
 // LoS_reference
 Rcpp::IntegerVector LoS_reference(const int x0_ref, const int y0_ref, const int r, const int nc_ref);
 RcppExport SEXP _CGEI_LoS_reference(SEXP x0_refSEXP, SEXP y0_refSEXP, SEXP rSEXP, SEXP nc_refSEXP) {
@@ -82,6 +103,7 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
+    {"_CGEI_IDW_cpp", (DL_FUNC) &_CGEI_IDW_cpp, 11},
     {"_CGEI_LoS_reference", (DL_FUNC) &_CGEI_LoS_reference, 4},
     {"_CGEI_rcpp_lacunarity", (DL_FUNC) &_CGEI_rcpp_lacunarity, 5},
     {"_CGEI_VGVI_cpp", (DL_FUNC) &_CGEI_VGVI_cpp, 13},
