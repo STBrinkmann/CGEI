@@ -79,8 +79,10 @@ vgvi <- function(observer, dsm_rast, dtm_rast, greenspace_rast,
                  cores = 1L, progress = FALSE) {
   #### 1. Check input ####
   # Check observer
+  valid_sf_types <- c("POINT", "MULTIPOINT", "LINESTRING", "MULTILINESTRING", "POLYGON", "MULTIPOLYGON")
   checkmate::assert(is(observer, "sf"), "observer must be an sf object")
   checkmate::assert(!sf::st_is_longlat(sf::st_crs(observer)), "observer must have a metric CRS")
+  checkmate::assert(sf::st_geometry_type(observer, by_geometry = FALSE) %in% valid_sf_types, "observer must be a geometry of type POINT, LINESTRING, MULTILINESTRING, POLYGON or MULTIPOLYGON")
   
   # Check rasters
   checkmate::assert(inherits(dsm_rast, "SpatRaster"), "dsm_rast must be a SpatRast object")
