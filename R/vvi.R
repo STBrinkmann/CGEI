@@ -10,21 +10,26 @@
 #' @param observer_height The height (in meters) of the observer above the ground level. Default is 1.7 meters.
 #' @param spacing optional; numeric > 0; Only if \code{observer} is a LINESTRING or POLYGON. Points on the line will be generated. The \code{spacing} parameter sets the distance in between the points on the line/grid. Defaults to the resolution of the \code{dsm_rast}.
 #' @param mode A character string specifying the type of decay function to apply to the visibility weights. Options are "VVI", or "viewshed". Default is "VVI".
+#' @param by_row logical; Only if \code{mode = "cumulative"}. See details for more information. Default is FALSE.
 #' @param cores The number of cores to use for parallel processing. This parameter is relevant only if the function is set to run in parallel. Default is 1.
 #' @param progress logical; Show progress bar and computation time?
 #'
 ##' @details 
-#' observer needs to be a geometry of type POINT, LINESTRING, MULTILINESTRING, POLYGON or MULTIPOLYGON. If observer is a LINESTRING or MULTILINESTRING, 
-#' points will be generated along the line(s) every "spacing" meters. If observer is a POLYGON or MULTIPOLYGON, a grid with resolution = "resolution" 
-#' will be generated, and VVI will be computed for every point.
-#' The CRS (\code{\link[sf]{st_crs}}) needs to have a metric unit!
+#' \code{observer} needs to be a geometry of type POINT, LINESTRING, MULTILINESTRING, POLYGON or MULTIPOLYGON. If observer is a LINESTRING or MULTILINESTRING, 
+#' points will be generated along the line(s) every \code{spacing} meters. If \code{observer} is a POLYGON or MULTIPOLYGON, a grid with resolution = \code{spacing} 
+#' will be generated, and VVI will be computed for every point. The CRS (\code{\link[sf]{st_crs}}) needs to have a metric unit!
 #' 
-#' If \code{mode = "VVI"}, an sf_object containing the VVI values as POINT features, where 0 = no visible cells, and 1 = all of the cells are visible.
-#' When mode is set to \code{viewshed}, the function outputs a SpatRaster with two layers derived from dsm_rast:
-#' 1. \code{n_views}: Counts how many times each cell is visible across all viewsheds. This layer identifies cells with high visibility across the landscape.
-#' 2. \code{view_per_viewshed}: Calculates the ratio of the number of viewsheds in which a cell is visible to the total number of potential viewsheds for that cell. This value, ranging between 0 and 1, indicates the proportion of potential observation points from which the cell is visible, providing a normalized measure of visibility.
-#'
-#' @return sf_object containing the weighted VGVI values as POINT features, where 0 = no green cells are visible, and 1 = all of the visible cells are green.
+#' \itemize{
+#' \item{\code{mode = "VVI"}\cr}{A sf_object containing the VVI values as POINT features, where 0 = no visible cells, and 1 = all of the cells are visible.}
+#' \item{\code{mode = "cumulative"}\cr}{\itemize{
+#' \item{\code{by_row = FALSE}\cr}{a single number indicating the cumulative proportion of cells that are visible from at least one observer point inside the area determined by the union of all observer points buffered by `max_distance`.}
+#' \item{\code{by_row = FALSE}\cr}{the Cumulative Viewshed Visibility Index (CVVI) is calculated for each observer point. The CVVI is the proportion of cells that are visible from each observer point inside the area determined by the union of all observer points buffered by `max_distance`.}
+#' }} 
+#' \item{\code{mode = "viewshed"}\cr}{\itemize{
+#' \item{\code{n_views}\cr}{Counts how many times each cell is visible across all viewsheds. This layer identifies cells with high visibility across the landscape.}
+#' \item{\code{view_per_viewshed}\cr}{Calculates the ratio of the number of viewsheds in which a cell is visible to the total number of potential viewsheds for that cell.}
+#' }}}
+#' @return `sf` or `SpatRaster` object. See details for more information.
 #'
 #' @examples
 #' \dontrun{
@@ -60,19 +65,21 @@
 #' @export
 #' @importFrom methods is
 #' @importFrom sf st_crs st_as_sf st_transform st_geometry_type st_union st_cast st_line_sample st_set_geometry st_bbox st_buffer st_coordinates st_as_sfc
-#' @importFrom dplyr rename mutate relocate everything
+#' @importFrom dplyr rename mutate relocate everything n_distinct
 #' @importFrom terra crs rast res crop mask vect xyFromCell extract cellFromXY colFromX rowFromY writeRaster
 #' @importFrom raster raster
 #' @importFrom checkmate assert
 #' @importFrom utils txtProgressBar setTxtProgressBar
 vvi <- function(observer, dsm_rast, dtm_rast,
                 max_distance = 200, observer_height = 1.7, 
-                spacing = NULL, mode = c("VVI", "viewshed"), 
-                cores = 1L, progress = FALSE) {
+                spacing = NULL, mode = c("VVI", "cumulative", "viewshed"), 
+                by_row = FALSE, cores = 1L, progress = FALSE) {
   #### 1. Check input ####
   # Check observer
+  valid_sf_types <- c("POINT", "MULTIPOINT", "LINESTRING", "MULTILINESTRING", "POLYGON", "MULTIPOLYGON")
   checkmate::assert(is(observer, "sf"), "observer must be an sf object")
   checkmate::assert(!sf::st_is_longlat(sf::st_crs(observer)), "observer must have a metric CRS")
+  checkmate::assert(sf::st_geometry_type(observer, by_geometry = FALSE) %in% valid_sf_types, "observer must be a geometry of type POINT, LINESTRING, MULTILINESTRING, POLYGON or MULTIPOLYGON")
   
   # Check rasters
   checkmate::assert(inherits(dsm_rast, "SpatRaster"), "dsm_rast must be a SpatRast object")
@@ -102,7 +109,7 @@ vvi <- function(observer, dsm_rast, dtm_rast,
   }
 
   # Check mode
-  mode <- match.arg(mode, c("VVI", "viewshed"))
+  mode <- match.arg(mode, c("VVI", "cumulative", "viewshed"))
   
   #### 2. Convert observer to points
   if(progress) {
@@ -203,36 +210,73 @@ vvi <- function(observer, dsm_rast, dtm_rast,
     })
   }
 
+  # Calculate viewsheds. Returns a list:
+  # visible_cells: Cells that are visible from the observer
+  # viewshed: All cells that fall within the viewshed regardless of visibility
   vvi_list <- VVI_cpp(dsm = dsm_cpp_rast, dsm_values = dsm_vec,
                       x0 = c0, y0 = r0, radius = max_distance, h0 = height_0_vec,
                       ncores = cores, display_progress = progress)
   
   if(mode == "VVI") {
-    visible_cells <- unlist(sapply(vvi_list, function(vvi) {
+    # VVI:
+    # % of visible cells to all cells in the viewshed
+    n_visible_cells <- unlist(sapply(vvi_list, function(vvi) {
       length(vvi$visible_cells)
     }))
-    viewshed <- unlist(sapply(vvi_list, function(vvi) {
+    n_viewshed <- unlist(sapply(vvi_list, function(vvi) {
       length(vvi$viewshed)
     }))
-    vvi <- visible_cells/viewshed
-    
+    vvi <- n_visible_cells / n_viewshed
     
     observer <- observer %>% 
       dplyr::mutate(VVI = vvi,
-                    n_visible_cells = visible_cells,
-                    n_total_cells = viewshed) %>% 
-      dplyr::select(VVI, n_visible_cells, n_total_cells, dplyr::everything())
+                    n_visible_cells = n_visible_cells) %>% 
+      dplyr::select(VVI, n_visible_cells, dplyr::everything())
     return(observer)
+  } else if (mode == "cumulative") {
+    if(!by_row) {
+      # Cumulative VVI - Total:
+      # How many cells in the accumulated viewsheds are visible from all observers?
+      visible_cells <- unlist(sapply(vvi_list, function(vvi) {
+        vvi$visible_cells
+      }))
+      viewshed_cells <- unlist(sapply(vvi_list, function(vvi) {
+        vvi$viewshed
+      }))
+      
+      return(dplyr::n_distinct(visible_cells) / dplyr::n_distinct(viewshed_cells))
+    } else {
+      # Cumulative VVI - By row:
+      # How many cells in the accumulated viewsheds are visible from each observer?
+      n_visible_cells <- unlist(sapply(vvi_list, function(vvi) {
+        length(vvi$visible_cells)
+      }))
+      
+      viewshed_cells <- unlist(sapply(vvi_list, function(vvi) {
+        vvi$viewshed
+      }))
+      
+      observer <- observer %>% 
+        dplyr::mutate(CVVI = n_visible_cells / dplyr::n_distinct(viewshed_cells)) %>% 
+        dplyr::select(CVVI, dplyr::everything())
+      return(observer)
+    }
   } else if(mode == "viewshed") {
-    viewshed_cells <- unlist(sapply(vvi_list, function(vvi) {
-      vvi$viewshed
-    }))
+    # Viewshed:
+    # n_views:  Per raster cell, how many observers can see it? Not taking into 
+    #           account if an observer can see the cell or not
+    # 
+    # view_per_viewshed:  % of observers that can see the raster cell. Taking only
+    #                     those observers that can potentially see the cell
     visible_cells <- unlist(sapply(vvi_list, function(vvi) {
       vvi$visible_cells
     }))
+    viewshed_cells <- unlist(sapply(vvi_list, function(vvi) {
+      vvi$viewshed
+    }))
     
-    viewshed_count <- tabulate(viewshed_cells, nbins = terra::ncell(dsm_rast))
     visible_count <- tabulate(visible_cells, nbins = terra::ncell(dsm_rast))
+    viewshed_count <- tabulate(viewshed_cells, nbins = terra::ncell(dsm_rast))
     
     output <- terra::rast(dsm_rast)
     output$n_views <- visible_count
@@ -245,6 +289,7 @@ vvi <- function(observer, dsm_rast, dtm_rast,
 # Helper function that converts SF to POINT
 sf_to_POINT <- function(x, spacing, dsm_rast) {
   if (as.character(sf::st_geometry_type(x, by_geometry = FALSE)) %in% c("LINESTRING", "MULTILINESTRING")) {
+    xx <- x
     sf_column <- attr(x, "sf_column")
     x <- x %>%
       sf::st_union() %>% 
@@ -255,20 +300,20 @@ sf_to_POINT <- function(x, spacing, dsm_rast) {
       sf::st_cast("POINT") %>% 
       sf::st_as_sf() %>% 
       sf::st_set_geometry(sf_column)
-    rm(sf_column)
+    x <- sf::st_join(x, xx, join = st_nearest_feature)
   } else if (as.character(sf::st_geometry_type(x, by_geometry = FALSE)) %in% c("POLYGON", "MULTIPOLYGON")) {
+    xx <- x
     sf_column <- attr(x, "sf_column")
-    x_bbox <- sf::st_bbox(x)
-    x <- terra::rast(xmin = x_bbox[1], xmax = x_bbox[3], 
-                            ymin = x_bbox[2], ymax = x_bbox[4], 
-                            crs = terra::crs(dsm_rast), resolution = spacing, vals = 0) %>% 
+    x_ext <- terra::ext(x)
+    x <- terra::rast(extent = x_ext, resolution = spacing, 
+                     crs = terra::crs(x), vals = 0) %>% 
       terra::crop(terra::vect(x)) %>% 
       terra::mask(terra::vect(x)) %>%
       terra::xyFromCell(which(terra::values(.) == 0)) %>%
       as.data.frame() %>% 
       sf::st_as_sf(coords = c("x","y"), crs = sf::st_crs(x)) %>% 
       sf::st_set_geometry(sf_column)
-    rm(x_bbox, sf_column)
+    x <- sf::st_join(x[xx,], xx)
   } else if (as.character(sf::st_geometry_type(x, by_geometry = FALSE)) == "MULTIPOINT") {
     observer <- sf::st_cast(x, "POINT")
   }
