@@ -4,4 +4,4 @@ This is the first release of CGEI.
 
 ## New Features
 
--   vvi() function now accepts `mode = "cumulative"` and `by_row` arguments. (#17, @hansvancalster)
+-   vvi() function now accepts `mode = "cumulative"` and `by_row` arguments. ([#17](https://github.com/STBrinkmann/CGEI/issues/17), @hansvancalster)
