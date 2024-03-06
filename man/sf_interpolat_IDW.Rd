@@ -35,6 +35,8 @@ sf_interpolat_IDW(
 
 \item{spacing}{optional; numeric; Only if \code{observer} is a linestring (or polygon), points on the line (or on a grid) will be generated. The \code{spacing} parameter sets the distance in between the points on the line/grid}
 
+\item{na_only}{logical; If TRUE, only NA values will be interpolated.}
+
 \item{cores}{numeric; The number of cores to use, i.e. at most how many child processes will be run simultaneously}
 
 \item{progress}{logical; Show progress bar?}
