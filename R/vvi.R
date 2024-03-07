@@ -116,7 +116,14 @@ vvi <- function(observer, dsm_rast, dtm_rast,
     message("Preprocessing:")
     pb = utils::txtProgressBar(min = 0, max = 5, initial = 0, style = 2)
   }
-  observer <- sf_to_POINT(observer, spacing, dsm_rast)
+  if(mode == "cumulative" && by_row) {
+    .observer <- observer
+    observer <- observer %>% 
+      dplyr::mutate(row_id_for_cumulative_vvi = dplyr::row_number()) %>%
+      sf_to_POINT(spacing, dsm_rast)
+  } else {
+    observer <- sf_to_POINT(observer, spacing, dsm_rast)
+  }
   
   if (progress) utils::setTxtProgressBar(pb, 1)
   
@@ -247,19 +254,31 @@ vvi <- function(observer, dsm_rast, dtm_rast,
       return(dplyr::n_distinct(visible_cells) / dplyr::n_distinct(viewshed_cells))
     } else {
       # Cumulative VVI - By row:
-      # How many cells in the accumulated viewsheds are visible from each observer?
-      n_visible_cells <- unlist(sapply(vvi_list, function(vvi) {
-        length(vvi$visible_cells)
-      }))
-      
+      # How much of the accumulated viewsheds is visible from a complete feature of the observer?
       viewshed_cells <- unlist(sapply(vvi_list, function(vvi) {
         vvi$viewshed
       }))
       
-      observer <- observer %>% 
+      # Calculates the number of visible cells for each observer
+      n_visible_cells <- lapply(seq_along(vvi_list), function(i) {
+        visible_cells = vvi_list[[i]]$visible_cells
+        data.frame(
+          row_id_for_cumulative_vvi = rep(observer$row_id_for_cumulative_vvi[i], length(visible_cells)),
+          visible_cells
+        )
+      }) %>% 
+        do.call(rbind, .)
+      
+      n_visible_cells <- n_visible_cells %>% 
+        dplyr::distinct() %>%
+        dplyr::group_by(row_id_for_cumulative_vvi) %>%
+        dplyr::reframe(n_visible_cells = dplyr::n()) %>% 
+        dplyr::pull(n_visible_cells)
+      
+      .observer <- .observer %>% 
         dplyr::mutate(CVVI = n_visible_cells / dplyr::n_distinct(viewshed_cells)) %>% 
         dplyr::select(CVVI, dplyr::everything())
-      return(observer)
+      return(.observer)
     }
   } else if(mode == "viewshed") {
     # Viewshed:
@@ -292,10 +311,12 @@ sf_to_POINT <- function(x, spacing, dsm_rast) {
     xx <- x
     sf_column <- attr(x, "sf_column")
     x <- x %>%
-      sf::st_union() %>% 
+      sf::st_union(by_feature = TRUE) %>% 
       sf::st_cast("LINESTRING") %>%
-      sf::st_line_sample(density = 1/spacing)
+      dplyr::mutate(length = as.numeric(sf::st_length(.)),
+                    spacing_feat = ifelse(length < spacing, length, spacing))
     
+    x <- sf::st_line_sample(x, density = 1/x$spacing_feat)
     x <- x[!sf::st_is_empty(x)] %>% 
       sf::st_cast("POINT") %>% 
       sf::st_as_sf() %>% 
