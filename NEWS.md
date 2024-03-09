@@ -1,3 +1,10 @@
+# CGEI 0.2.1
+
+## Bug fixes
+
+-   `vvi(mode = c("VVI", "cumulative"), by_row = TRUE)` now works as expected. ([#17](https://github.com/STBrinkmann/CGEI/issues/17))
+-   `vvi()` manual has been adjusted. ([#23](https://github.com/STBrinkmann/CGEI/issues/23))
+
 # CGEI 0.2.0
 
 ## New Features
