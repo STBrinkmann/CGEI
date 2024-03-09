@@ -11,7 +11,8 @@ vvi(
   max_distance = 200,
   observer_height = 1.7,
   spacing = NULL,
-  mode = c("VVI", "viewshed"),
+  mode = c("VVI", "cumulative", "viewshed"),
+  by_row = FALSE,
   cores = 1L,
   progress = FALSE
 )
@@ -31,27 +32,37 @@ vvi(
 
 \item{mode}{A character string specifying the type of decay function to apply to the visibility weights. Options are "VVI", or "viewshed". Default is "VVI".}
 
+\item{by_row}{logical; Only relevant if observer is not a POINT feature and only for \code{mode = c("VVI", "cumulative")}. See details for more information. Default is FALSE.}
+
 \item{cores}{The number of cores to use for parallel processing. This parameter is relevant only if the function is set to run in parallel. Default is 1.}
 
 \item{progress}{logical; Show progress bar and computation time?}
 }
 \value{
-sf_object containing the weighted VGVI values as POINT features, where 0 = no green cells are visible, and 1 = all of the visible cells are green.
+`sf` or `SpatRaster` object. See details for more information.
 }
 \description{
 The VVI expresses the proportion of visible area to the total area based on a viewshed (\code{\link[CGEI]{viewshed_list}}).
 The estimated VVI values range between 0 and 1, where 0 = no cells within the buffer is visible, and 1 = all of the cells are visible.
 }
 \details{
-observer needs to be a geometry of type POINT, LINESTRING, MULTILINESTRING, POLYGON or MULTIPOLYGON. If observer is a LINESTRING or MULTILINESTRING, 
-points will be generated along the line(s) every "spacing" meters. If observer is a POLYGON or MULTIPOLYGON, a grid with resolution = "resolution" 
-will be generated, and VVI will be computed for every point.
-The CRS (\code{\link[sf]{st_crs}}) needs to have a metric unit!
+\code{observer} needs to be a geometry of type POINT, LINESTRING, MULTILINESTRING, POLYGON or MULTIPOLYGON. If observer is a LINESTRING or MULTILINESTRING, 
+points will be generated along the line(s) every \code{spacing} meters. If \code{observer} is a POLYGON or MULTIPOLYGON, a grid with resolution = \code{spacing} 
+will be generated, and VVI will be computed for every point. The CRS (\code{\link[sf]{st_crs}}) needs to have a metric unit!
 
-If \code{mode = "VVI"}, an sf_object containing the VVI values as POINT features, where 0 = no visible cells, and 1 = all of the cells are visible.
-When mode is set to \code{viewshed}, the function outputs a SpatRaster with two layers derived from dsm_rast:
-1. \code{n_views}: Counts how many times each cell is visible across all viewsheds. This layer identifies cells with high visibility across the landscape.
-2. \code{view_per_viewshed}: Calculates the ratio of the number of viewsheds in which a cell is visible to the total number of potential viewsheds for that cell. This value, ranging between 0 and 1, indicates the proportion of potential observation points from which the cell is visible, providing a normalized measure of visibility.
+\itemize{
+\item{\code{mode = "VVI"}\cr}{\itemize{
+\item{\code{by_row = FALSE}\cr}{Returns a `sf` object containing the VVI values as POINT features, where 0 = no visible cells, and 1 = all of the cells are visible.}
+\item{\code{by_row = TRUE}\cr}{Returns a `sf` object containing the VVI for each row of the observer feature in its original geometry.}
+}} 
+\item{\code{mode = "cumulative"}\cr}{\itemize{
+\item{\code{by_row = FALSE}\cr}{Returns the Cumulative Viewshed Visibility Index (CVVI); A single number indicating the cumulative proportion of cells that are visible from at least one observer point inside the area determined by the union of all observer points buffered by `max_distance`.}
+\item{\code{by_row = TRUE}\cr}{Returns the Cumulative Viewshed Visibility Index (CVVI) for each row of the observer features in its original geometry.}
+}} 
+\item{\code{mode = "viewshed"; Returns a `SpatRast` with two layers:}\cr}{\itemize{
+\item{\code{n_views}\cr}{Counts how many times each cell is visible across all viewsheds. This layer identifies cells with high visibility across the landscape.}
+\item{\code{view_per_viewshed}\cr}{Calculates the ratio of the number of viewsheds in which a cell is visible to the total number of potential viewsheds for that cell.}
+}}}
 }
 \examples{
 \dontrun{
