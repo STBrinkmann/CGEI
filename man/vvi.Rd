@@ -32,7 +32,7 @@ vvi(
 
 \item{mode}{A character string specifying the type of decay function to apply to the visibility weights. Options are "VVI", or "viewshed". Default is "VVI".}
 
-\item{by_row}{logical; Only if \code{mode = "cumulative"}. See details for more information. Default is FALSE.}
+\item{by_row}{logical; Only relevant if observer is not a POINT feature and only for \code{mode = c("VVI", "cumulative")}. See details for more information. Default is FALSE.}
 
 \item{cores}{The number of cores to use for parallel processing. This parameter is relevant only if the function is set to run in parallel. Default is 1.}
 
@@ -51,12 +51,15 @@ points will be generated along the line(s) every \code{spacing} meters. If \code
 will be generated, and VVI will be computed for every point. The CRS (\code{\link[sf]{st_crs}}) needs to have a metric unit!
 
 \itemize{
-\item{\code{mode = "VVI"}\cr}{A sf_object containing the VVI values as POINT features, where 0 = no visible cells, and 1 = all of the cells are visible.}
-\item{\code{mode = "cumulative"}\cr}{\itemize{
-\item{\code{by_row = FALSE}\cr}{a single number indicating the cumulative proportion of cells that are visible from at least one observer point inside the area determined by the union of all observer points buffered by `max_distance`.}
-\item{\code{by_row = FALSE}\cr}{the Cumulative Viewshed Visibility Index (CVVI) is calculated for each observer point. The CVVI is the proportion of cells that are visible from each observer point inside the area determined by the union of all observer points buffered by `max_distance`.}
+\item{\code{mode = "VVI"}\cr}{\itemize{
+\item{\code{by_row = FALSE}\cr}{Returns a `sf` object containing the VVI values as POINT features, where 0 = no visible cells, and 1 = all of the cells are visible.}
+\item{\code{by_row = TRUE}\cr}{Returns a `sf` object containing the VVI for each row of the observer feature in its original geometry.}
 }} 
-\item{\code{mode = "viewshed"}\cr}{\itemize{
+\item{\code{mode = "cumulative"}\cr}{\itemize{
+\item{\code{by_row = FALSE}\cr}{Returns the Cumulative Viewshed Visibility Index (CVVI); A single number indicating the cumulative proportion of cells that are visible from at least one observer point inside the area determined by the union of all observer points buffered by `max_distance`.}
+\item{\code{by_row = TRUE}\cr}{Returns the Cumulative Viewshed Visibility Index (CVVI) for each row of the observer features in its original geometry.}
+}} 
+\item{\code{mode = "viewshed"; Returns a `SpatRast` with two layers:}\cr}{\itemize{
 \item{\code{n_views}\cr}{Counts how many times each cell is visible across all viewsheds. This layer identifies cells with high visibility across the landscape.}
 \item{\code{view_per_viewshed}\cr}{Calculates the ratio of the number of viewsheds in which a cell is visible to the total number of potential viewsheds for that cell.}
 }}}

@@ -10,7 +10,7 @@
 #' @param observer_height The height (in meters) of the observer above the ground level. Default is 1.7 meters.
 #' @param spacing optional; numeric > 0; Only if \code{observer} is a LINESTRING or POLYGON. Points on the line will be generated. The \code{spacing} parameter sets the distance in between the points on the line/grid. Defaults to the resolution of the \code{dsm_rast}.
 #' @param mode A character string specifying the type of decay function to apply to the visibility weights. Options are "VVI", or "viewshed". Default is "VVI".
-#' @param by_row logical; Only if \code{mode = "cumulative"}. See details for more information. Default is FALSE.
+#' @param by_row logical; Only relevant if observer is not a POINT feature and only for \code{mode = c("VVI", "cumulative")}. See details for more information. Default is FALSE.
 #' @param cores The number of cores to use for parallel processing. This parameter is relevant only if the function is set to run in parallel. Default is 1.
 #' @param progress logical; Show progress bar and computation time?
 #'
@@ -20,12 +20,15 @@
 #' will be generated, and VVI will be computed for every point. The CRS (\code{\link[sf]{st_crs}}) needs to have a metric unit!
 #' 
 #' \itemize{
-#' \item{\code{mode = "VVI"}\cr}{A sf_object containing the VVI values as POINT features, where 0 = no visible cells, and 1 = all of the cells are visible.}
-#' \item{\code{mode = "cumulative"}\cr}{\itemize{
-#' \item{\code{by_row = FALSE}\cr}{a single number indicating the cumulative proportion of cells that are visible from at least one observer point inside the area determined by the union of all observer points buffered by `max_distance`.}
-#' \item{\code{by_row = FALSE}\cr}{the Cumulative Viewshed Visibility Index (CVVI) is calculated for each observer point. The CVVI is the proportion of cells that are visible from each observer point inside the area determined by the union of all observer points buffered by `max_distance`.}
+#' \item{\code{mode = "VVI"}\cr}{\itemize{
+#' \item{\code{by_row = FALSE}\cr}{Returns a `sf` object containing the VVI values as POINT features, where 0 = no visible cells, and 1 = all of the cells are visible.}
+#' \item{\code{by_row = TRUE}\cr}{Returns a `sf` object containing the VVI for each row of the observer feature in its original geometry.}
 #' }} 
-#' \item{\code{mode = "viewshed"}\cr}{\itemize{
+#' \item{\code{mode = "cumulative"}\cr}{\itemize{
+#' \item{\code{by_row = FALSE}\cr}{Returns the Cumulative Viewshed Visibility Index (CVVI); A single number indicating the cumulative proportion of cells that are visible from at least one observer point inside the area determined by the union of all observer points buffered by `max_distance`.}
+#' \item{\code{by_row = TRUE}\cr}{Returns the Cumulative Viewshed Visibility Index (CVVI) for each row of the observer features in its original geometry.}
+#' }} 
+#' \item{\code{mode = "viewshed"; Returns a `SpatRast` with two layers:}\cr}{\itemize{
 #' \item{\code{n_views}\cr}{Counts how many times each cell is visible across all viewsheds. This layer identifies cells with high visibility across the landscape.}
 #' \item{\code{view_per_viewshed}\cr}{Calculates the ratio of the number of viewsheds in which a cell is visible to the total number of potential viewsheds for that cell.}
 #' }}}
@@ -64,7 +67,7 @@
 #'
 #' @export
 #' @importFrom methods is
-#' @importFrom sf st_crs st_as_sf st_transform st_geometry_type st_union st_cast st_line_sample st_set_geometry st_bbox st_buffer st_coordinates st_as_sfc
+#' @importFrom sf st_crs st_as_sf st_transform st_geometry_type st_union st_cast st_line_sample st_set_geometry st_bbox st_buffer st_coordinates st_as_sfc st_nearest_feature
 #' @importFrom dplyr rename mutate relocate everything n_distinct
 #' @importFrom terra crs rast res crop mask vect xyFromCell extract cellFromXY colFromX rowFromY writeRaster
 #' @importFrom raster raster
@@ -116,7 +119,7 @@ vvi <- function(observer, dsm_rast, dtm_rast,
     message("Preprocessing:")
     pb = utils::txtProgressBar(min = 0, max = 5, initial = 0, style = 2)
   }
-  if(mode == "cumulative" && by_row) {
+  if(mode != "viewshed" && by_row) {
     .observer <- observer
     observer <- observer %>% 
       dplyr::mutate(row_id_for_cumulative_vvi = dplyr::row_number()) %>%
@@ -227,39 +230,69 @@ vvi <- function(observer, dsm_rast, dtm_rast,
   if(mode == "VVI") {
     # VVI:
     # % of visible cells to all cells in the viewshed
-    n_visible_cells <- unlist(sapply(vvi_list, function(vvi) {
-      length(vvi$visible_cells)
-    }))
-    n_viewshed <- unlist(sapply(vvi_list, function(vvi) {
-      length(vvi$viewshed)
-    }))
-    vvi <- n_visible_cells / n_viewshed
-    
-    observer <- observer %>% 
-      dplyr::mutate(VVI = vvi,
-                    n_visible_cells = n_visible_cells) %>% 
-      dplyr::select(VVI, n_visible_cells, dplyr::everything())
-    return(observer)
-  } else if (mode == "cumulative") {
-    if(!by_row) {
-      # Cumulative VVI - Total:
-      # How many cells in the accumulated viewsheds are visible from all observers?
-      visible_cells <- unlist(sapply(vvi_list, function(vvi) {
-        vvi$visible_cells
-      }))
-      viewshed_cells <- unlist(sapply(vvi_list, function(vvi) {
-        vvi$viewshed
-      }))
+    if(by_row) {
+      # Calculates the number of viewshed cells for each observer, by feature
+      n_viewshed <- lapply(seq_along(vvi_list), function(i) {
+        viewshed = vvi_list[[i]]$viewshed
+        data.frame(
+          row_id_for_cumulative_vvi = rep(observer$row_id_for_cumulative_vvi[i], length(viewshed)),
+          viewshed
+        )
+      }) %>% 
+        do.call(rbind, .)
       
-      return(dplyr::n_distinct(visible_cells) / dplyr::n_distinct(viewshed_cells))
+      n_viewshed <- n_viewshed %>% 
+        dplyr::distinct() %>%
+        dplyr::group_by(row_id_for_cumulative_vvi) %>%
+        dplyr::reframe(n_viewshed = dplyr::n()) %>% 
+        dplyr::pull(n_viewshed)
+      
+      # Calculates the number of visible cells for each observer, by feature
+      n_visible_cells <- lapply(seq_along(vvi_list), function(i) {
+        visible_cells = vvi_list[[i]]$visible_cells
+        data.frame(
+          row_id_for_cumulative_vvi = rep(observer$row_id_for_cumulative_vvi[i], length(visible_cells)),
+          visible_cells
+        )
+      }) %>% 
+        do.call(rbind, .)
+      
+      n_visible_cells <- n_visible_cells %>% 
+        dplyr::distinct() %>%
+        dplyr::group_by(row_id_for_cumulative_vvi) %>%
+        dplyr::reframe(n_visible_cells = dplyr::n()) %>% 
+        dplyr::pull(n_visible_cells)
+      
+      .observer <- .observer %>% 
+        dplyr::mutate(VVI = n_visible_cells / n_viewshed,
+                      n_visible_cells = n_visible_cells) %>% 
+        dplyr::select(VVI, n_visible_cells, dplyr::everything())
+      return(.observer)
     } else {
-      # Cumulative VVI - By row:
+      n_visible_cells <- unlist(sapply(vvi_list, function(vvi) {
+        length(vvi$visible_cells)
+      }))
+      n_viewshed <- unlist(sapply(vvi_list, function(vvi) {
+        length(vvi$viewshed)
+      }))
+      vvi <- n_visible_cells / n_viewshed
+      
+      observer <- observer %>% 
+        dplyr::mutate(VVI = vvi,
+                      n_visible_cells = n_visible_cells) %>% 
+        dplyr::select(VVI, n_visible_cells, dplyr::everything())
+      return(observer)
+    }
+  } else if (mode == "cumulative") {
+    # Cumulative VVI - Total:
+    if(by_row) {
       # How much of the accumulated viewsheds is visible from a complete feature of the observer?
+      # Get cumulative viewshed of all observers 
       viewshed_cells <- unlist(sapply(vvi_list, function(vvi) {
         vvi$viewshed
       }))
       
-      # Calculates the number of visible cells for each observer
+      # Calculates the number of visible cells for each observer, by feature
       n_visible_cells <- lapply(seq_along(vvi_list), function(i) {
         visible_cells = vvi_list[[i]]$visible_cells
         data.frame(
@@ -279,6 +312,16 @@ vvi <- function(observer, dsm_rast, dtm_rast,
         dplyr::mutate(CVVI = n_visible_cells / dplyr::n_distinct(viewshed_cells)) %>% 
         dplyr::select(CVVI, dplyr::everything())
       return(.observer)
+    } else {
+      # How many cells in the accumulated viewsheds are visible from all observers?
+      visible_cells <- unlist(sapply(vvi_list, function(vvi) {
+        vvi$visible_cells
+      }))
+      viewshed_cells <- unlist(sapply(vvi_list, function(vvi) {
+        vvi$viewshed
+      }))
+      
+      return(dplyr::n_distinct(visible_cells) / dplyr::n_distinct(viewshed_cells))
     }
   } else if(mode == "viewshed") {
     # Viewshed:
@@ -321,7 +364,7 @@ sf_to_POINT <- function(x, spacing, dsm_rast) {
       sf::st_cast("POINT") %>% 
       sf::st_as_sf() %>% 
       sf::st_set_geometry(sf_column)
-    x <- sf::st_join(x, xx, join = st_nearest_feature)
+    x <- sf::st_join(x, xx, join = sf::st_nearest_feature)
   } else if (as.character(sf::st_geometry_type(x, by_geometry = FALSE)) %in% c("POLYGON", "MULTIPOLYGON")) {
     xx <- x
     sf_column <- attr(x, "sf_column")
