@@ -13,7 +13,7 @@ visualizeWeights(
 )
 }
 \arguments{
-\item{x}{numeric or object of class \code{\link[terra]{rast}}; Either numeric, indicating the buffer distance or a \code{\link[terra]{rast}} of the \code{\link[VGVI]{viewshed_list}} function.}
+\item{x}{numeric or object of class \code{\link[terra]{rast}}; Either numeric, indicating the buffer distance or a \code{\link[terra]{rast}} of the \code{\link[CGEI]{viewshed_list}} function.}
 
 \item{m}{numeric; See ‘Details’.}
 
