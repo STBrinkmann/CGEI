@@ -61,7 +61,7 @@
 #' 
 #' dtm_rast <- rast(dsm_rast, vals=0) # Flat terrain
 #' 
-#' # Calculate VGVI
+#' # Calculate VVI
 #' vvi_results <- vvi(observer, dsm_rast, dtm_rast)
 #' }
 #'
@@ -110,7 +110,7 @@ vvi <- function(observer, dsm_rast, dtm_rast,
   if(is.null(spacing)) {
     spacing <- terra::res(dsm_rast)[1]
   }
-
+  
   # Check mode
   mode <- match.arg(mode, c("VVI", "cumulative", "viewshed"))
   
@@ -219,7 +219,7 @@ vvi <- function(observer, dsm_rast, dtm_rast,
       message(paste("Average time for a single point:", time_dif, "milliseconds"))
     })
   }
-
+  
   # Calculate viewsheds. Returns a list:
   # visible_cells: Cells that are visible from the observer
   # viewshed: All cells that fall within the viewshed regardless of visibility
@@ -364,7 +364,7 @@ sf_to_POINT <- function(x, spacing, dsm_rast) {
       sf::st_cast("POINT") %>% 
       sf::st_as_sf() %>% 
       sf::st_set_geometry(sf_column)
-    x <- sf::st_join(x, xx, join = sf::st_nearest_feature)
+    return(sf::st_join(x, xx, join = sf::st_nearest_feature))
   } else if (as.character(sf::st_geometry_type(x, by_geometry = FALSE)) %in% c("POLYGON", "MULTIPOLYGON")) {
     xx <- x
     sf_column <- attr(x, "sf_column")
@@ -377,10 +377,10 @@ sf_to_POINT <- function(x, spacing, dsm_rast) {
       as.data.frame() %>% 
       sf::st_as_sf(coords = c("x","y"), crs = sf::st_crs(x)) %>% 
       sf::st_set_geometry(sf_column)
-    x <- sf::st_join(x[xx,], xx)
+    return(sf::st_join(x[xx,], xx))
   } else if (as.character(sf::st_geometry_type(x, by_geometry = FALSE)) == "MULTIPOINT") {
-    observer <- sf::st_cast(x, "POINT")
+    return(sf::st_cast(x, "POINT"))
+  } else {
+    return(x)
   }
-  
-  return(x)
 }

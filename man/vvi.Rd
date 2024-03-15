@@ -91,7 +91,7 @@ dsm_rast[] <- runif(ncell(dsm_rast), 0, 1.5) # Assign random heights
 
 dtm_rast <- rast(dsm_rast, vals=0) # Flat terrain
 
-# Calculate VGVI
+# Calculate VVI
 vvi_results <- vvi(observer, dsm_rast, dtm_rast)
 }
 
