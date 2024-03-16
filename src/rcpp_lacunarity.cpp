@@ -1,4 +1,6 @@
 #include <Rcpp.h>
+#include "rsinfo.h"
+#include "rasterutils.h"
 using namespace Rcpp;
 
 // Helper function to compute the number of iterations of the main
@@ -82,19 +84,19 @@ double lacunarity (NumericVector box_masses,
 #include "eta_progress_bar.h"
 
 // [[Rcpp::export]]
-NumericVector rcpp_lacunarity(const NumericMatrix &mat,
+NumericVector rcpp_lacunarity(Rcpp::S4 &x, const Rcpp::NumericVector &x_values,
                               const IntegerVector &r_vec,
                               const int fun,
                               const int ncores=1,
                               const bool display_progress=false) {
+  
   // Basic raster information
-  const int mat_width = mat.ncol();
-  const int mat_height = mat.nrow();
+  const RasterInfo x_ras(x);
   
   // Vector to store box masses of previous r
-  NumericVector prev_box_mass_min(mat_width*mat_height, NA_REAL);
-  NumericVector prev_box_mass_max(mat_width*mat_height, NA_REAL);
-  NumericVector prev_box_mass_sum(mat_width*mat_height, NA_REAL);
+  NumericVector prev_box_mass_min(x_ras.ncell, NA_REAL);
+  NumericVector prev_box_mass_max(x_ras.ncell, NA_REAL);
+  NumericVector prev_box_mass_sum(x_ras.ncell, NA_REAL);
   
   // Output
   NumericVector output(r_vec.size());
@@ -106,7 +108,8 @@ NumericVector rcpp_lacunarity(const NumericMatrix &mat,
   // Begin main loop
   for (int j = 0; j < r_vec.size(); j++) {
     const int r = r_vec[j];
-    const int N_r = (mat_width - r + 1) * (mat_height - r + 1);
+    // const int N_r = (mat_width - r + 1) * (mat_height - r + 1);
+    const int N_r = (x_ras.ncol - r + 1) * (x_ras.nrow - r + 1);
     
     // Gliding box algorithm
     // Init shared vector for parallel loop
@@ -121,9 +124,9 @@ NumericVector rcpp_lacunarity(const NumericMatrix &mat,
         Progress::check_abort();
         
         // Get x/y from i
-        const int y = trunc(i / (mat_width - r + 1));
-        const int x = i - (y * (mat_width - r + 1));
-        const int cell = y * mat_width + x;
+        const int row = trunc(i / (x_ras.ncol - r + 1));
+        const int col = i - (row * (x_ras.ncol - r + 1));
+        const int cell = row * x_ras.ncol + col;
         
         // Pull previous box mass value
         const double prev_min = prev_box_mass_min[cell];
@@ -133,19 +136,16 @@ NumericVector rcpp_lacunarity(const NumericMatrix &mat,
         double cell_min = NumericVector::is_na(prev_min) ? R_PosInf : prev_min;
         double cell_max = NumericVector::is_na(prev_max) ? R_NegInf : prev_max;
         double cell_sum = NumericVector::is_na(prev_sum) ? 0.0 : prev_sum;
-        
-        bool prev = true;
-        if(NumericVector::is_na(prev_min) && NumericVector::is_na(prev_max) && NumericVector::is_na(prev_sum)) {
-          prev = false;
-        }
-        
+
         // Get box mass (window of r*r):
         // If fun == 1, box-sum will be calculated, else box-range
         int n = 0;
-        if(prev) {
+        if(j > 0) {
           for (int bx = r_vec[j-1]; bx < r; bx++) {
             for (int by=0; by < r; by++) {
-              const double cell_value = mat(x+bx,y+by);
+              const int cell_id = (row+bx) * x_ras.ncol + (col+by);
+              const double cell_value = x_values[cell_id];
+              
               if (!NumericVector::is_na(cell_value)) {
                 // Update min
                 if (cell_value < cell_min)
@@ -165,7 +165,9 @@ NumericVector rcpp_lacunarity(const NumericMatrix &mat,
           }
           for (int bx = 0; bx < r_vec[j-1]; bx++) {
             for (int by=r_vec[j-1]; by < r; by++) {
-              const double cell_value = mat(x+bx,y+by);
+              const int cell_id = (row+bx) * x_ras.ncol + (col+by);
+              const double cell_value = x_values[cell_id];
+              
               if (!NumericVector::is_na(cell_value)) {
                 // Update min
                 if (cell_value < cell_min)
@@ -186,7 +188,9 @@ NumericVector rcpp_lacunarity(const NumericMatrix &mat,
         } else {
           for (int bx = 0; bx < r; bx++) {
             for (int by=0; by < r; by++) {
-              const double cell_value = mat(x+bx,y+by);
+              const int cell_id = (row+bx) * x_ras.ncol + (col+by);
+              const double cell_value = x_values[cell_id];
+              
               if (!NumericVector::is_na(cell_value)) {
                 // Update min
                 if (cell_value < cell_min)
