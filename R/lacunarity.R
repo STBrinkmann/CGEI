@@ -162,6 +162,8 @@ lacunarity <- function(x, r_vec = NULL, r_max = NULL, plot = FALSE, plot_path = 
       }
       
       r_vec <- c(2^(1:max_r)+1, round(min(dim(this_x)[1:2])/4)*2+1)
+    } else {
+      set_r_vec_null <- FALSE
     }
     
     # r_max
@@ -175,10 +177,11 @@ lacunarity <- function(x, r_vec = NULL, r_max = NULL, plot = FALSE, plot_path = 
     lac_fun <- as.integer(nrow(terra::unique(this_x)) <= 2)
     
     # Convert raster to matrix
-    rast_mat <- terra::as.matrix(this_x, wide = TRUE)
+    this_x_vec <- terra::values(this_x, mat = FALSE)
+    this_x_rast <- this_x %>% terra::rast() %>% raster::raster()
     
     # Calculate Lacunarity for all w
-    this_lac <- rcpp_lacunarity(mat = rast_mat,
+    this_lac <- rcpp_lacunarity(x = this_x_rast, x_values = this_x_vec,
                                 r_vec = r_vec,
                                 fun = lac_fun,
                                 ncores = ncores,
