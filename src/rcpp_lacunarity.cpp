@@ -27,6 +27,15 @@ int max_iterations (const IntegerVector w_vec,
   return(iters);
 }
 
+int calculate_N_r_total(int x_ras_ncol, int x_ras_nrow, IntegerVector r_vec) {
+  int N_r_total = 0;
+  for(int i = 0; i < r_vec.size(); ++i) {
+    int r = r_vec[i];
+    int N_r = (x_ras_ncol - r + 1) * (x_ras_nrow - r + 1);
+    N_r_total += N_r;
+  }
+  return N_r_total;
+}
 
 // Calculate Lacunarity based on Plotnik ()
 double lacunarity (NumericVector box_masses,
@@ -235,9 +244,8 @@ NumericVector rcpp_lacunarity(Rcpp::S4 &x, const Rcpp::NumericVector &x_values,
     // Compute lacunarity
     double lac = lacunarity(bm_narm, fun, N_r);
     
-    output[j] = lac;
-    
     pb.increment();
+    output[j] = lac;
   }
   
   return(output);
