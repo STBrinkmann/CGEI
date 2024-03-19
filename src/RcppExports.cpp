@@ -45,18 +45,35 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// rcpp_lacunarity
-NumericVector rcpp_lacunarity(const NumericMatrix& mat, const IntegerVector& r_vec, const int fun, const int ncores, const bool display_progress);
-RcppExport SEXP _CGEI_rcpp_lacunarity(SEXP matSEXP, SEXP r_vecSEXP, SEXP funSEXP, SEXP ncoresSEXP, SEXP display_progressSEXP) {
+// focal_sum
+NumericMatrix focal_sum(S4& x, const NumericMatrix& x_mat, const NumericMatrix& lac, const bool na_rm, const int ncores, const bool display_progress);
+RcppExport SEXP _CGEI_focal_sum(SEXP xSEXP, SEXP x_matSEXP, SEXP lacSEXP, SEXP na_rmSEXP, SEXP ncoresSEXP, SEXP display_progressSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< const NumericMatrix& >::type mat(matSEXP);
+    Rcpp::traits::input_parameter< S4& >::type x(xSEXP);
+    Rcpp::traits::input_parameter< const NumericMatrix& >::type x_mat(x_matSEXP);
+    Rcpp::traits::input_parameter< const NumericMatrix& >::type lac(lacSEXP);
+    Rcpp::traits::input_parameter< const bool >::type na_rm(na_rmSEXP);
+    Rcpp::traits::input_parameter< const int >::type ncores(ncoresSEXP);
+    Rcpp::traits::input_parameter< const bool >::type display_progress(display_progressSEXP);
+    rcpp_result_gen = Rcpp::wrap(focal_sum(x, x_mat, lac, na_rm, ncores, display_progress));
+    return rcpp_result_gen;
+END_RCPP
+}
+// rcpp_lacunarity
+NumericVector rcpp_lacunarity(Rcpp::S4& x, const Rcpp::NumericVector& x_values, const IntegerVector& r_vec, const int fun, const int ncores, const bool display_progress);
+RcppExport SEXP _CGEI_rcpp_lacunarity(SEXP xSEXP, SEXP x_valuesSEXP, SEXP r_vecSEXP, SEXP funSEXP, SEXP ncoresSEXP, SEXP display_progressSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::S4& >::type x(xSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type x_values(x_valuesSEXP);
     Rcpp::traits::input_parameter< const IntegerVector& >::type r_vec(r_vecSEXP);
     Rcpp::traits::input_parameter< const int >::type fun(funSEXP);
     Rcpp::traits::input_parameter< const int >::type ncores(ncoresSEXP);
     Rcpp::traits::input_parameter< const bool >::type display_progress(display_progressSEXP);
-    rcpp_result_gen = Rcpp::wrap(rcpp_lacunarity(mat, r_vec, fun, ncores, display_progress));
+    rcpp_result_gen = Rcpp::wrap(rcpp_lacunarity(x, x_values, r_vec, fun, ncores, display_progress));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -105,7 +122,8 @@ END_RCPP
 static const R_CallMethodDef CallEntries[] = {
     {"_CGEI_IDW_cpp", (DL_FUNC) &_CGEI_IDW_cpp, 11},
     {"_CGEI_LoS_reference", (DL_FUNC) &_CGEI_LoS_reference, 4},
-    {"_CGEI_rcpp_lacunarity", (DL_FUNC) &_CGEI_rcpp_lacunarity, 5},
+    {"_CGEI_focal_sum", (DL_FUNC) &_CGEI_focal_sum, 6},
+    {"_CGEI_rcpp_lacunarity", (DL_FUNC) &_CGEI_rcpp_lacunarity, 6},
     {"_CGEI_VGVI_cpp", (DL_FUNC) &_CGEI_VGVI_cpp, 13},
     {"_CGEI_VVI_cpp", (DL_FUNC) &_CGEI_VVI_cpp, 8},
     {NULL, NULL, 0}

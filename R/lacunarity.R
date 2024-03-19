@@ -8,8 +8,8 @@
 #' @param r_max integer (optional); Maximum value of `r`, `r_vec` will be cut off for values >r.
 #' @param plot logical; Should the summary Lacunarity figure, showing Lacunarity of all SpatRasters be printed?
 #' @param plot_path folder path; If not NULL, a folder path to save Lacunarity plots (see details)
+#' @param cores The number of cores to use for parallel processing. Default is 1.
 #' @param progress logical; Show progress bar?
-#' @param ncores numeric; The number of cores to use.
 #'
 #' @details
 #' \code{lacunarity} is based on the algorithm for binary images provided by \href{https://doi.org/10.1007/BF00125351}{Plotnick et al. 1993}.
@@ -50,7 +50,7 @@
 #' @importFrom stats na.omit
 #' @importFrom utils write.csv
 #' @useDynLib CGEI, .registration = TRUE
-lacunarity <- function(x, r_vec = NULL, r_max = NULL, plot = FALSE, plot_path = NULL, progress = FALSE, ncores = 1L) {
+lacunarity <- function(x, r_vec = NULL, r_max = NULL, plot = FALSE, plot_path = NULL, cores = 1L, progress = FALSE) {
   
   # 1. Check input ----------------------------------------------------------
   # Check if x is a list and contains only SpatRaster objects
@@ -125,9 +125,9 @@ lacunarity <- function(x, r_vec = NULL, r_max = NULL, plot = FALSE, plot_path = 
   # Check progress flag
   checkmate::assertFlag(progress, add = "progress must be logical (TRUE/FALSE)")
   
-  # Check ncores
-  checkmate::assertNumeric(ncores, lower = 1, any.missing = FALSE, add = "ncores must be numeric and at least 1")
-  ncores <- ifelse(ncores <= 1, 1L, floor(ncores))
+  # Check cores
+  checkmate::assertNumeric(cores, lower = 1, any.missing = FALSE, add = "cores must be numeric and at least 1")
+  cores <- ifelse(cores <= 1, 1L, floor(cores))
   
   
   # 2. Main loop ------------------------------------------------------------
@@ -162,6 +162,8 @@ lacunarity <- function(x, r_vec = NULL, r_max = NULL, plot = FALSE, plot_path = 
       }
       
       r_vec <- c(2^(1:max_r)+1, round(min(dim(this_x)[1:2])/4)*2+1)
+    } else {
+      set_r_vec_null <- FALSE
     }
     
     # r_max
@@ -174,14 +176,15 @@ lacunarity <- function(x, r_vec = NULL, r_max = NULL, plot = FALSE, plot_path = 
     # Is r binary? (e.g. Greenspace raster)
     lac_fun <- as.integer(nrow(terra::unique(this_x)) <= 2)
     
-    # Convert raster to matrix
-    rast_mat <- terra::as.matrix(this_x, wide = TRUE)
+    # Convert raster to vector
+    this_x_vec <- terra::values(this_x, mat = FALSE)
+    this_x_rast <- this_x %>% terra::rast() %>% raster::raster()
     
     # Calculate Lacunarity for all w
-    this_lac <- rcpp_lacunarity(mat = rast_mat,
+    this_lac <- rcpp_lacunarity(x = this_x_rast, x_values = this_x_vec,
                                 r_vec = r_vec,
                                 fun = lac_fun,
-                                ncores = ncores,
+                                ncores = cores,
                                 display_progress = progress)
     
     this_out <- dplyr::tibble(

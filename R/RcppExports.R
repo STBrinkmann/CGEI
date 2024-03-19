@@ -9,8 +9,12 @@ LoS_reference <- function(x0_ref, y0_ref, r, nc_ref) {
     .Call(`_CGEI_LoS_reference`, x0_ref, y0_ref, r, nc_ref)
 }
 
-rcpp_lacunarity <- function(mat, r_vec, fun, ncores = 1L, display_progress = FALSE) {
-    .Call(`_CGEI_rcpp_lacunarity`, mat, r_vec, fun, ncores, display_progress)
+focal_sum <- function(x, x_mat, lac, na_rm = TRUE, ncores = 1L, display_progress = FALSE) {
+    .Call(`_CGEI_focal_sum`, x, x_mat, lac, na_rm, ncores, display_progress)
+}
+
+rcpp_lacunarity <- function(x, x_values, r_vec, fun, ncores = 1L, display_progress = FALSE) {
+    .Call(`_CGEI_rcpp_lacunarity`, x, x_values, r_vec, fun, ncores, display_progress)
 }
 
 VGVI_cpp <- function(dsm, dsm_values, greenspace, greenspace_values, x0, y0, h0, radius, fun, m, b, ncores = 1L, display_progress = FALSE) {

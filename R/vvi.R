@@ -11,7 +11,7 @@
 #' @param spacing optional; numeric > 0; Only if \code{observer} is a LINESTRING or POLYGON. Points on the line will be generated. The \code{spacing} parameter sets the distance in between the points on the line/grid. Defaults to the resolution of the \code{dsm_rast}.
 #' @param mode A character string specifying the type of decay function to apply to the visibility weights. Options are "VVI", or "viewshed". Default is "VVI".
 #' @param by_row logical; Only relevant if observer is not a POINT feature and only for \code{mode = c("VVI", "cumulative")}. See details for more information. Default is FALSE.
-#' @param cores The number of cores to use for parallel processing. This parameter is relevant only if the function is set to run in parallel. Default is 1.
+#' @param cores The number of cores to use for parallel processing. Default is 1.
 #' @param progress logical; Show progress bar and computation time?
 #'
 ##' @details 
@@ -61,7 +61,7 @@
 #' 
 #' dtm_rast <- rast(dsm_rast, vals=0) # Flat terrain
 #' 
-#' # Calculate VGVI
+#' # Calculate VVI
 #' vvi_results <- vvi(observer, dsm_rast, dtm_rast)
 #' }
 #'
@@ -110,7 +110,7 @@ vvi <- function(observer, dsm_rast, dtm_rast,
   if(is.null(spacing)) {
     spacing <- terra::res(dsm_rast)[1]
   }
-
+  
   # Check mode
   mode <- match.arg(mode, c("VVI", "cumulative", "viewshed"))
   
@@ -219,7 +219,7 @@ vvi <- function(observer, dsm_rast, dtm_rast,
       message(paste("Average time for a single point:", time_dif, "milliseconds"))
     })
   }
-
+  
   # Calculate viewsheds. Returns a list:
   # visible_cells: Cells that are visible from the observer
   # viewshed: All cells that fall within the viewshed regardless of visibility
@@ -364,7 +364,7 @@ sf_to_POINT <- function(x, spacing, dsm_rast) {
       sf::st_cast("POINT") %>% 
       sf::st_as_sf() %>% 
       sf::st_set_geometry(sf_column)
-    x <- sf::st_join(x, xx, join = sf::st_nearest_feature)
+    return(sf::st_join(x, xx, join = sf::st_nearest_feature))
   } else if (as.character(sf::st_geometry_type(x, by_geometry = FALSE)) %in% c("POLYGON", "MULTIPOLYGON")) {
     xx <- x
     sf_column <- attr(x, "sf_column")
@@ -377,10 +377,10 @@ sf_to_POINT <- function(x, spacing, dsm_rast) {
       as.data.frame() %>% 
       sf::st_as_sf(coords = c("x","y"), crs = sf::st_crs(x)) %>% 
       sf::st_set_geometry(sf_column)
-    x <- sf::st_join(x[xx,], xx)
+    return(sf::st_join(x[xx,], xx))
   } else if (as.character(sf::st_geometry_type(x, by_geometry = FALSE)) == "MULTIPOINT") {
-    observer <- sf::st_cast(x, "POINT")
+    return(sf::st_cast(x, "POINT"))
+  } else {
+    return(x)
   }
-  
-  return(x)
 }

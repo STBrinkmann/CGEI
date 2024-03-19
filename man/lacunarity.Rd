@@ -10,8 +10,8 @@ lacunarity(
   r_max = NULL,
   plot = FALSE,
   plot_path = NULL,
-  progress = FALSE,
-  ncores = 1L
+  cores = 1L,
+  progress = FALSE
 )
 }
 \arguments{
@@ -27,9 +27,9 @@ that no r value is greater than half of the shorter dimension of `x`. If `r_vec`
 
 \item{plot_path}{folder path; If not NULL, a folder path to save Lacunarity plots (see details)}
 
-\item{progress}{logical; Show progress bar?}
+\item{cores}{The number of cores to use for parallel processing. Default is 1.}
 
-\item{ncores}{numeric; The number of cores to use.}
+\item{progress}{logical; Show progress bar?}
 }
 \value{
 \code{\link[tibble]{tibble}} containing all Lacunarity values: \code{name} and \code{i} refer to the name and index of the raster input.

@@ -14,7 +14,7 @@
 #' @param m Parameter for the decay function, applicable if a decay function is selected. Default is 1.
 #' @param b Parameter for the decay function, applicable if a decay function is selected. Default is 6.
 #' @param mode A character string specifying the type of decay function to apply to the visibility weights. Options are "none" (no decay), "exponential", or "logit". Default is "none".
-#' @param cores The number of cores to use for parallel processing. This parameter is relevant only if the function is set to run in parallel. Default is 1.
+#' @param cores The number of cores to use for parallel processing. Default is 1.
 #' @param progress logical; Show progress bar and computation time?
 #'
 ##' @details 

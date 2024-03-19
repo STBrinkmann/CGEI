@@ -34,7 +34,7 @@ vvi(
 
 \item{by_row}{logical; Only relevant if observer is not a POINT feature and only for \code{mode = c("VVI", "cumulative")}. See details for more information. Default is FALSE.}
 
-\item{cores}{The number of cores to use for parallel processing. This parameter is relevant only if the function is set to run in parallel. Default is 1.}
+\item{cores}{The number of cores to use for parallel processing. Default is 1.}
 
 \item{progress}{logical; Show progress bar and computation time?}
 }
@@ -91,7 +91,7 @@ dsm_rast[] <- runif(ncell(dsm_rast), 0, 1.5) # Assign random heights
 
 dtm_rast <- rast(dsm_rast, vals=0) # Flat terrain
 
-# Calculate VGVI
+# Calculate VVI
 vvi_results <- vvi(observer, dsm_rast, dtm_rast)
 }
 
