@@ -10,7 +10,7 @@
 #' @param raster_res numeric; Resolution of the interpolatet raster map that is returned
 #' @param spacing optional; numeric; Only if \code{observer} is a linestring (or polygon), points on the line (or on a grid) will be generated. The \code{spacing} parameter sets the distance in between the points on the line/grid
 #' @param na_only logical; If TRUE, only NA values will be interpolated.
-#' @param cores numeric; The number of cores to use, i.e. at most how many child processes will be run simultaneously
+#' @param cores The number of cores to use for parallel processing. Default is 1.
 #' @param progress logical; Show progress bar?
 #'
 #' @details 
