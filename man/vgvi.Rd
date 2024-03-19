@@ -40,7 +40,7 @@ vgvi(
 
 \item{mode}{A character string specifying the type of decay function to apply to the visibility weights. Options are "none" (no decay), "exponential", or "logit". Default is "none".}
 
-\item{cores}{The number of cores to use for parallel processing. This parameter is relevant only if the function is set to run in parallel. Default is 1.}
+\item{cores}{The number of cores to use for parallel processing. Default is 1.}
 
 \item{progress}{logical; Show progress bar and computation time?}
 }

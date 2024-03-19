@@ -37,7 +37,7 @@ sf_interpolat_IDW(
 
 \item{na_only}{logical; If TRUE, only NA values will be interpolated.}
 
-\item{cores}{numeric; The number of cores to use, i.e. at most how many child processes will be run simultaneously}
+\item{cores}{The number of cores to use for parallel processing. Default is 1.}
 
 \item{progress}{logical; Show progress bar?}
 }

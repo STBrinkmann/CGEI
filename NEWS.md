@@ -1,3 +1,16 @@
+# CGEI 0.3.0
+
+## New Features
+
+-   `gavi()` function has been added. This function calculates the Greenspace Availability IndexIndex (GAVI) after a `lacunarity()` analysis.
+
+## Docs
+
+-   The C++ `lacunarity()` function now uses the R4 raster class.
+-   The parameters `cores` and `progress` were adjusted in a uniform style in the existing functions.
+-   Tests for the `gavi()` function have been added.
+
+
 # CGEI 0.2.1
 
 ## Bug fixes
