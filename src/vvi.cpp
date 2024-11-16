@@ -102,15 +102,20 @@ Rcpp::List VVI_cpp(Rcpp::S4 &dsm, const Rcpp::NumericVector &dsm_values,
               // Project reference cell to true cell value
               const int cell = x + los_ref_cell + trunc(los_ref_cell/nc_ref)*(dsm_ras.ncol-nc_ref);
               
-              // DSM height at this LoS path cell
-              const double h_cell = dsm_values[cell];
-              
               // Test if this LoS path cell is within DSM raster
               const int row = trunc(cell/dsm_ras.ncol);
               const int col = cell - (row * dsm_ras.ncol);
               const int dcol = abs(col-x0_o[k]);
               
-              if(!(cell<0 || cell >= dsm_ras.ncell || Rcpp::NumericVector::is_na(h_cell) || dcol>r)){
+              if(!(cell<0 || cell >= dsm_ras.ncell || dcol>r)){
+                // DSM height at this LoS path cell
+                const double h_cell = dsm_values[cell];
+                
+                // Test if h_cell is NA
+                if(Rcpp::NumericVector::is_na(h_cell)){
+                  continue;
+                }
+                
                 // Compute tangent of x0/y0 (observer location) and this LoS path cell
                 const double distance_traveled = sqrt(
                   (x0_o[k] - col)*(x0_o[k] - col) + (y0_o[k] - row)*(y0_o[k] - row)

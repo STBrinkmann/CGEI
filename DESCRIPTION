@@ -1,7 +1,7 @@
 Package: CGEI
 Type: Package
 Title: R package for computing the Composite Greenspace Exposure Index (CGEI)
-Version: 0.3.0
+Version: 0.3.1
 Date: 2024-02-18
 Authors@R: 
     c(person(given = "Sebastian",
@@ -33,5 +33,5 @@ LinkingTo:
 Suggests: 
     ggpubr,
     testthat (>= 3.0.0)
-RoxygenNote: 7.3.1
+RoxygenNote: 7.3.2
 Config/testthat/edition: 3

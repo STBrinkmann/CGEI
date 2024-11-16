@@ -1,3 +1,7 @@
+# CGEI 0.3.1
+
+-   Fixed the "subscript out of bounds" bug in the `vgvi.cpp` and `vvi.cpp` functions.
+
 # CGEI 0.3.0
 
 ## New Features
