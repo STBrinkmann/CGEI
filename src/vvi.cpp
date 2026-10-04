@@ -57,6 +57,14 @@ VviObservers prepare(const IntegerVector &x0, const IntegerVector &y0, const Ras
 // geometry) inside the raster with a valid height, plus the observer cell.
 enum class VviOut { kLists, kCounts, kCells };
 
+// Per-thread buffers for the cell lists of the current observer (padded, see
+// cgei::kCachePad); copied to the observer's result once it is complete.
+struct ListBuffers {
+  char pad_front_[cgei::kCachePad];
+  std::vector<int> visible, seen;
+  char pad_back_[cgei::kCachePad];
+};
+
 struct VviResult {
   std::vector<std::vector<int>> visible, seen;
   std::vector<int> n_visible, n_seen;
@@ -101,6 +109,7 @@ VviResult run_vvi(const NumericVector &dsm, const NumericVector &dsm_values, con
   }
 
   std::vector<cgei::SweepScratch> scratch;
+  std::vector<ListBuffers> buffers(lists ? nthreads : 0);
   scratch.reserve(nthreads);
   for (int t = 0; t < nthreads; ++t) scratch.emplace_back(T);
 
@@ -112,7 +121,8 @@ VviResult run_vvi(const NumericVector &dsm, const NumericVector &dsm_values, con
 #endif
   for (int idx = 0; idx < nvalid; ++idx) {
     if (progress.aborted()) continue;
-    cgei::SweepScratch &S = scratch[cgei::omp_thread_num()];
+    const int tid = cgei::omp_thread_num();
+    cgei::SweepScratch &S = scratch[tid];
     const int k = obs.order[idx];
     const long long cell0 = obs.cell[k];
     const int row0 = obs.row[k], col0 = obs.col[k];
@@ -121,8 +131,11 @@ VviResult run_vvi(const NumericVector &dsm, const NumericVector &dsm_values, con
     // Visible cells: the observer cell plus everything found by the sweep.
     S.first_visit(T.ref_center());
     int n_vis = 1;
-    std::vector<int> *vis = lists ? &res.visible[k] : nullptr;
-    if (vis) vis->push_back(static_cast<int>(cell0) + 1);
+    std::vector<int> *vis = lists ? &buffers[tid].visible : nullptr;
+    if (vis) {
+      vis->clear();
+      vis->push_back(static_cast<int>(cell0) + 1);
+    }
     if (cells) {
 #ifdef _OPENMP
 #pragma omp atomic
@@ -154,12 +167,16 @@ VviResult run_vvi(const NumericVector &dsm, const NumericVector &dsm_values, con
       }
     }
     S.reset();
-    if (vis) std::sort(vis->begin(), vis->end());
+    if (vis) {
+      std::sort(vis->begin(), vis->end());
+      res.visible[k].assign(vis->begin(), vis->end());
+    }
     res.n_visible[k] = n_vis;
 
     // Potential viewshed
     if (lists) {
-      std::vector<int> &seen = res.seen[k];
+      std::vector<int> &seen = buffers[tid].seen;
+      seen.clear();
       bool own_done = false;
       cov.for_each(row0, col0, ras.nrow, ras.ncol, [&](const int rr, const int c0, const int c1) {
         if (!own_done && (rr > row0 || (rr == row0 && c0 > col0))) {
@@ -174,6 +191,7 @@ VviResult run_vvi(const NumericVector &dsm, const NumericVector &dsm_values, con
         }
       });
       if (!own_done) seen.push_back(static_cast<int>(cell0) + 1);
+      res.seen[k].assign(seen.begin(), seen.end());
       res.n_seen[k] = static_cast<int>(seen.size());
     } else if (!cells) {
       res.n_seen[k] = cgei::count_seen(cov, valid, row0, col0, ras.nrow, ras.ncol);

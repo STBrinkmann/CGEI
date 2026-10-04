@@ -217,10 +217,19 @@ struct GridInfo {
 };
 
 // Per-thread scratch space of the sweep.
+// Bytes of padding around per-thread objects that are stored next to each
+// other (e.g. in a std::vector, one element per thread): their members are
+// written in the innermost loops, and without padding the objects of
+// neighbouring threads would share cache lines ("false sharing"). Two cache
+// lines, as Intel CPUs prefetch pairs of lines.
+constexpr std::size_t kCachePad = 128;
+
 struct SweepScratch {
+  char pad_front_[kCachePad];
   std::vector<double> horizon;        // horizon (max tangent) per step of the current line
   std::vector<unsigned char> mask;    // first-visit flags on the reference grid
   std::vector<int> touched;           // reference ids set in `mask` (for resetting)
+  char pad_back_[kCachePad];
 
   explicit SweepScratch(const LosTable &T)
       : horizon(static_cast<std::size_t>(std::max(1, T.max_len)), kNoHorizon),

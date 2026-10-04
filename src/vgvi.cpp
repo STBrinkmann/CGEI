@@ -96,11 +96,13 @@ struct GreenspaceMap {
   }
 };
 
-// Per-thread distance-ring histogram.
+// Per-thread distance-ring histogram (padded, see cgei::kCachePad).
 struct Rings {
+  char pad_front_[cgei::kCachePad];
   std::vector<int> total;      // visible cells per ring
   std::vector<double> green;   // summed greenspace values per ring
   int max_used = 0;
+  char pad_back_[cgei::kCachePad];
   explicit Rings(const int max_ring) : total(max_ring + 1, 0), green(max_ring + 1, 0.0) {}
   inline void add(const int ring, const double g) {
     total[ring] += 1;
