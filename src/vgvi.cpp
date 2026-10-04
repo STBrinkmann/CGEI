@@ -150,6 +150,113 @@ struct VgviResult {
   std::vector<std::vector<double>> green;
 };
 
+// Everything the parallel loop needs (plain C++ objects and raw pointers only).
+struct VgviJob {
+  const RasterInfo *dsm_ras;
+  const Observers *obs;
+  const cgei::LosTable *T;
+  const cgei::VisMask *M;
+  const cgei::BlockMax *bm;
+  const GreenspaceMap *gmap;
+  const double *dsm_v;           // DSM values (double; observer cells, bounds)
+  const double *gs_v;
+  const double *h0_v;
+  const std::vector<int> *ring_of;   // ring of (|dr|, |dc|), (r + 1) x (r + 1)
+  const std::vector<double> *weight;
+  int r, fun, nthreads, batch;
+  bool early_stop, want_rings;
+};
+
+// The observers in Morton order, in batches of job.batch: sweep a batch, then
+// read every observer's mask in raster order into its ring histogram. V is the
+// storage type of the DSM used by the sweep (float if exact, else double).
+template <class V>
+void vgvi_loop(const VgviJob &job, const V *dsm_sweep, cgei::ParallelProgress &progress,
+               VgviResult &res) {
+  const RasterInfo &ras = *job.dsm_ras;
+  const Observers &obs = *job.obs;
+  const cgei::LosTable &T = *job.T;
+  const cgei::VisMask &M = *job.M;
+  const GreenspaceMap &gmap = *job.gmap;
+  const std::vector<int> &ring_of = *job.ring_of;
+  const int r = job.r, nrow = ras.nrow, ncol = ras.ncol;
+
+  // Per-thread scratch, allocated outside the parallel region.
+  std::vector<cgei::BatchScratch> scratch;
+  std::vector<Rings> rings;
+  scratch.reserve(job.nthreads);
+  rings.reserve(job.nthreads);
+  int max_ring = 1;
+  for (const int ring : ring_of) max_ring = std::max(max_ring, ring);
+  for (int t = 0; t < job.nthreads; ++t) {
+    scratch.emplace_back(T, M, job.batch);
+    rings.emplace_back(max_ring);
+  }
+
+  const int nvalid = static_cast<int>(obs.order.size());
+  const int nbatch = (nvalid + job.batch - 1) / job.batch;
+
+#ifdef _OPENMP
+#pragma omp parallel for num_threads(job.nthreads) schedule(dynamic, 1)
+#endif
+  for (int b = 0; b < nbatch; ++b) {
+    if (progress.aborted()) continue;
+    const int tid = cgei::omp_thread_num();
+    cgei::BatchScratch &S = scratch[tid];
+    Rings &R = rings[tid];
+    const int i0 = b * job.batch, i1 = std::min(nvalid, i0 + job.batch);
+
+    // The observer cell is always visible; lines of sight only if the eye
+    // level is above the surface.
+    S.viewers.clear();
+    for (int i = i0; i < i1; ++i) {
+      const int k = obs.order[i];
+      std::uint64_t *mask = S.mask(i - i0);
+      cgei::mask_set(mask, M.center);
+      if (job.h0_v[k] > job.dsm_v[obs.cell[k]]) {
+        cgei::Viewer v;
+        v.cell0 = obs.cell[k];
+        v.row0 = obs.row[k];
+        v.col0 = obs.col[k];
+        v.h0 = job.h0_v[k];
+        v.interior = v.row0 - r >= 0 && v.row0 + r < nrow && v.col0 - r >= 0 && v.col0 + r < ncol;
+        v.mask = mask;
+        v.hz = S.horizon(i - i0);
+        v.valid_upto = -1;
+        if (job.early_stop) cgei::quadrant_bounds(T, *job.bm, v.row0, v.col0, v.h0, v.qbound);
+        S.viewers.push_back(v);
+      }
+    }
+    cgei::sweep_batch(T, M, dsm_sweep, nrow, ncol, job.early_stop, S.viewers.data(),
+                      static_cast<int>(S.viewers.size()));
+
+    for (int i = i0; i < i1; ++i) {
+      const int k = obs.order[i];
+      const int row0 = obs.row[k], col0 = obs.col[k];
+      const long long cell0 = obs.cell[k];
+      cgei::drain_mask(M, S.mask(i - i0), [&](const int dr, const int dc) {
+        const int ring = ring_of[static_cast<std::size_t>(std::abs(dr)) * (r + 1) + std::abs(dc)];
+        // dr / dc are only needed if the greenspace grid differs from the DSM grid
+        const long long cell = cell0 + static_cast<long long>(dr) * ncol + dc;
+        R.add(ring, gmap.same_grid ? gmap.value(job.gs_v, 0, 0, cell)
+                                   : gmap.value(job.gs_v, row0 + dr, col0 + dc, cell));
+      });
+      res.value[k] = vgvi_index(R, job.fun, *job.weight);
+      if (job.want_rings) {
+        for (int ring = 1; ring <= R.max_used; ++ring) {
+          if (R.total[ring] > 0) {
+            res.ring[k].push_back(ring);
+            res.total[k].push_back(R.total[ring]);
+            res.green[k].push_back(R.green[ring]);
+          }
+        }
+      }
+      R.reset();
+    }
+    progress.tick(static_cast<unsigned long>(i1 - i0));
+  }
+}
+
 VgviResult run_vgvi(const NumericVector &dsm, const NumericVector &dsm_values, const NumericVector &greenspace,
                     const NumericVector &greenspace_values, const IntegerVector &x0,
                     const IntegerVector &y0, const NumericVector &h0, const int radius,
@@ -170,16 +277,22 @@ VgviResult run_vgvi(const NumericVector &dsm, const NumericVector &dsm_values, c
 
   // Line-of-sight geometry
   const int r = static_cast<int>(std::round(radius / dsm_ras.res));
+  if (r > cgei::kMaxRadius) Rcpp::stop("max_distance is too large for the resolution of the DSM.");
   cgei::LosTable T(r);
   if (!T.bind(dsm_ras.ncol)) Rcpp::stop("Raster too large for the radius.");
+  const cgei::VisMask M(r);
 
-  // Distance ring of every step: distance in map units, rounded, at least 1.
-  std::vector<int> ring_of_step(T.dist.size());
+  // Distance ring of every cell of the neighbourhood: distance in map units,
+  // rounded, at least 1 (by symmetry a function of |dr| and |dc|).
+  std::vector<int> ring_of(static_cast<std::size_t>(r + 1) * (r + 1));
   int max_ring = 1;
-  for (std::size_t s = 0; s < T.dist.size(); ++s) {
-    const int ring = std::max(1, static_cast<int>(std::lround(dsm_ras.res * T.dist[s])));
-    ring_of_step[s] = ring;
-    max_ring = std::max(max_ring, ring);
+  for (int a = 0; a <= r; ++a) {
+    for (int c = 0; c <= r; ++c) {
+      const double d = std::sqrt(static_cast<double>(a * a + c * c));
+      const int ring = std::max(1, static_cast<int>(std::lround(dsm_ras.res * d)));
+      ring_of[static_cast<std::size_t>(a) * (r + 1) + c] = ring;
+      max_ring = std::max(max_ring, ring);
+    }
   }
 
   // Decay weight of every ring: integral of the decay function over the ring's
@@ -195,8 +308,6 @@ VgviResult run_vgvi(const NumericVector &dsm, const NumericVector &dsm_values, c
 
   const GreenspaceMap gmap(dsm_ras, gs_ras);
   const double *dsm_v = dsm_values.begin();
-  const double *gs_v = greenspace_values.begin();
-  const double *h0_v = h0.begin();
   const int nthreads = cgei::resolve_threads(ncores);
   // Block maxima for the early-termination bounds (an empty grid if disabled)
   const cgei::BlockMax bm(dsm_v, early_stop ? dsm_ras.nrow : 0, early_stop ? dsm_ras.ncol : 0,
@@ -210,71 +321,33 @@ VgviResult run_vgvi(const NumericVector &dsm, const NumericVector &dsm_values, c
     res.green.resize(n);
   }
 
-  // Per-thread scratch, allocated outside the parallel region.
-  std::vector<cgei::SweepScratch> scratch;
-  std::vector<Rings> rings;
-  scratch.reserve(nthreads);
-  rings.reserve(nthreads);
-  for (int t = 0; t < nthreads; ++t) {
-    scratch.emplace_back(T);
-    rings.emplace_back(max_ring);
-  }
+  VgviJob job;
+  job.dsm_ras = &dsm_ras;
+  job.obs = &obs;
+  job.T = &T;
+  job.M = &M;
+  job.bm = &bm;
+  job.gmap = &gmap;
+  job.dsm_v = dsm_v;
+  job.gs_v = greenspace_values.begin();
+  job.h0_v = h0.begin();
+  job.ring_of = &ring_of;
+  job.weight = &weight;
+  job.r = r;
+  job.fun = fun;
+  job.nthreads = nthreads;
+  job.batch = cgei::batch_size(M);
+  job.early_stop = early_stop;
+  job.want_rings = want_rings;
 
-  const int nvalid = static_cast<int>(obs.order.size());
-  cgei::ParallelProgress progress(nvalid, display_progress);
-
-#ifdef _OPENMP
-#pragma omp parallel for num_threads(nthreads) schedule(dynamic, 16)
-#endif
-  for (int idx = 0; idx < nvalid; ++idx) {
-    if (progress.aborted()) continue;
-    const int tid = cgei::omp_thread_num();
-    cgei::SweepScratch &S = scratch[tid];
-    Rings &R = rings[tid];
-    const int k = obs.order[idx];
-    const long long cell0 = obs.cell[k];
-    const int row0 = obs.row[k], col0 = obs.col[k];
-    const double hk = h0_v[k];
-
-    // The observer cell is always visible.
-    S.first_visit(T.ref_center());
-    R.add(1, gmap.value(gs_v, row0, col0, cell0));
-
-    // Lines of sight only if the eye level is above the surface.
-    if (hk > dsm_v[cell0]) {
-      double qbound[4] = {0, 0, 0, 0};
-      if (early_stop) cgei::quadrant_bounds(T, bm, row0, col0, hk, qbound);
-      auto visit = [&](const int s, const long long cell) {
-        if (!S.first_visit(T.step[s].ref)) return;
-        // dr / dc are only needed if the greenspace grid differs from the DSM grid
-        const double g = gmap.same_grid ? gmap.value(gs_v, 0, 0, cell)
-                                        : gmap.value(gs_v, row0 + T.dr[s], col0 + T.dc[s], cell);
-        R.add(ring_of_step[s], g);
-      };
-      const bool interior = row0 - r >= 0 && row0 + r < dsm_ras.nrow &&
-                            col0 - r >= 0 && col0 + r < dsm_ras.ncol;
-      if (interior) {
-        cgei::sweep_lines<false>(T, dsm_v, dsm_ras.nrow, dsm_ras.ncol, cell0, row0, col0,
-                                 hk, qbound, early_stop, S, visit);
-      } else {
-        cgei::sweep_lines<true>(T, dsm_v, dsm_ras.nrow, dsm_ras.ncol, cell0, row0, col0,
-                                hk, qbound, early_stop, S, visit);
-      }
-    }
-
-    res.value[k] = vgvi_index(R, fun, weight);
-    if (want_rings) {
-      for (int ring = 1; ring <= R.max_used; ++ring) {
-        if (R.total[ring] > 0) {
-          res.ring[k].push_back(ring);
-          res.total[k].push_back(R.total[ring]);
-          res.green[k].push_back(R.green[ring]);
-        }
-      }
-    }
-    R.reset();
-    S.reset();
-    progress.tick();
+  cgei::ParallelProgress progress(obs.order.size(), display_progress);
+  const std::size_t ncell = static_cast<std::size_t>(dsm_ras.nrow) * dsm_ras.ncol;
+  if (cgei::float_exact(dsm_v, ncell, nthreads)) {
+    std::vector<float> dsm_f(ncell);
+    cgei::to_float(dsm_v, ncell, dsm_f.data(), nthreads);
+    vgvi_loop<float>(job, dsm_f.data(), progress, res);
+  } else {
+    vgvi_loop<double>(job, dsm_v, progress, res);
   }
   progress.finish();  // throws if the user interrupted
   return res;

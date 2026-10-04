@@ -20,17 +20,33 @@
 //    original missed column wrap-arounds whenever the raster had <= 2r columns).
 //
 // Performance:
-//  * all geometry (offsets, distances, prefix lengths) is precomputed once;
-//  * no allocation per observer; first-visit de-duplication uses a reusable
-//    byte mask that is reset through the list of touched cells;
+//  * all geometry (offsets, distances, prefix lengths) is precomputed once and
+//    packed into 16 bytes per step;
 //  * exact early termination: a line is abandoned as soon as no remaining cell
 //    can beat the current horizon, using a cheap per-quadrant upper bound of
-//    the DSM (block maxima). Results are identical with and without it.
+//    the DSM (block maxima). Results are identical with and without it;
+//  * visible cells are only flagged in a per-observer bit mask of the
+//    (2r+1) x (2r+1) neighbourhood (one OR per visible step, which also
+//    de-duplicates cells seen by several lines). The callers read the mask
+//    afterwards in raster order (drain_mask()), i.e. with sequential access to
+//    their own rasters instead of a random access per visible step;
+//  * observers are swept in batches of nearby observers (Morton order), line by
+//    line: the steps of a line are loaded once per batch and the DSM cells of
+//    neighbouring observers are mostly the same, so both stay in the caches;
+//  * the DSM is read as float if all its values are exactly representable as
+//    float (e.g. read from a Float32 GeoTIFF): half the memory traffic, same
+//    values and therefore identical results.
+//
+// The order in which the lines of an observer are walked, and the order of the
+// observers, do not change the result: the visibility of a cell on a line only
+// depends on the cells before it on that line, and the mask is the union over
+// all lines.
 
 #ifndef CGEI_VIEWSHED_ENGINE_H
 #define CGEI_VIEWSHED_ENGINE_H
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -43,11 +59,14 @@ namespace cgei {
 
 constexpr double kNoHorizon = -9999.0;  // initial horizon, as in the original code
 
+// Largest supported radius in cells (row / column offsets are stored as int16).
+constexpr int kMaxRadius = 32767;
+
 // Precomputed line-of-sight table for a radius of r cells.
 struct LosTable {
   int r = 0;
-  int nref = 1;     // number of cells of the (2r+1) x (2r+1) reference grid
   int nlines = 0;
+  bool too_large = false;  // radius above kMaxRadius (empty table)
 
   // Lines in CSR layout: steps of line l are line_beg[l] .. line_beg[l + 1] - 1
   std::vector<int> line_beg;
@@ -56,40 +75,33 @@ struct LosTable {
   std::vector<double> dist_last;    // distance of the last step of the line
   std::vector<unsigned char> monotone;  // distance strictly increasing along the line?
 
-  // Per step
-  std::vector<int> dr, dc;    // row / column offset from the observer
-  std::vector<int> ref;       // reference-grid id (dr + r) * (2r + 1) + (dc + r)
-  std::vector<double> dist;   // sqrt(dr^2 + dc^2) in cells (same expression as the original)
-
-  // Hot data of the sweep, packed per step (set by bind())
+  // Hot data of the sweep, one record per step
   struct Step {
-    double dist;   // as above
-    int off;       // linear offset dr * ncol + dc
-    int ref;       // as above
+    double dist;          // sqrt(dr^2 + dc^2) in cells (same expression as the original)
+    int off;              // linear offset dr * ncol + dc (set by bind())
+    std::int16_t dr, dc;  // row / column offset from the observer
   };
   std::vector<Step> step;
 
   // Bounding box (in offsets) of all steps of each quadrant
   int qbox[4][4];             // [q][0..3] = min_dr, max_dr, min_dc, max_dc
 
-  // All reference cells reached by any line (sorted by ref), used for VVI
+  // All reference cells reached by any line (row-major), used for VVI
   std::vector<int> cover_dr, cover_dc;
 
-  double max_dist = 0.0;
   int max_len = 0;
 
   explicit LosTable(const int radius_cells) { build(radius_cells); }
 
   void build(const int radius_cells) {
     r = radius_cells > 0 ? radius_cells : 0;
+    too_large = r > kMaxRadius;
+    if (too_large) r = 0;
     const int nc_ref = 2 * r + 1;
-    nref = nc_ref * nc_ref;
     nlines = 8 * r;
     line_beg.assign(1, 0);
     start.clear(); quadrant.clear(); dist_last.clear(); monotone.clear();
-    dr.clear(); dc.clear(); ref.clear(); dist.clear(); step.clear();
-    cover_dr.clear(); cover_dc.clear();
-    max_dist = 0.0;
+    step.clear(); cover_dr.clear(); cover_dc.clear();
     max_len = 0;
     for (int q = 0; q < 4; ++q) {
       qbox[q][0] = qbox[q][2] = std::numeric_limits<int>::max();
@@ -99,7 +111,7 @@ struct LosTable {
 
     const std::vector<int> los = los_reference(r, r, r, nc_ref);
     const std::vector<int> shared = shared_los(r, los);
-    std::vector<unsigned char> covered(static_cast<std::size_t>(nref), 0);
+    std::vector<unsigned char> covered(static_cast<std::size_t>(nc_ref) * nc_ref, 0);
 
     for (int l = 0; l < nlines; ++l) {
       const int q = l / (2 * r);
@@ -112,13 +124,9 @@ struct LosTable {
         const int rr = cell / nc_ref, cc = cell - (cell / nc_ref) * nc_ref;
         const int ddr = rr - r, ddc = cc - r;
         const double d = std::sqrt(static_cast<double>(ddr * ddr + ddc * ddc));
-        dr.push_back(ddr);
-        dc.push_back(ddc);
-        ref.push_back(cell);
-        dist.push_back(d);
+        step.push_back(Step{d, 0, static_cast<std::int16_t>(ddr), static_cast<std::int16_t>(ddc)});
         if (!(d > prev)) mono = false;
         prev = d;
-        if (d > max_dist) max_dist = d;
         covered[cell] = 1;
         qbox[q][0] = std::min(qbox[q][0], ddr);
         qbox[q][1] = std::max(qbox[q][1], ddr);
@@ -126,7 +134,7 @@ struct LosTable {
         qbox[q][3] = std::max(qbox[q][3], ddc);
         ++len;
       }
-      line_beg.push_back(static_cast<int>(dr.size()));
+      line_beg.push_back(static_cast<int>(step.size()));
       // A shared prefix can never be longer than the line itself.
       start.push_back(std::min(shared[l], len));
       quadrant.push_back(q);
@@ -134,7 +142,7 @@ struct LosTable {
       monotone.push_back(mono ? 1 : 0);
       if (len > max_len) max_len = len;
     }
-    for (int cell = 0; cell < nref; ++cell) {
+    for (int cell = 0; cell < nc_ref * nc_ref; ++cell) {
       if (covered[cell]) {
         cover_dr.push_back(cell / nc_ref - r);
         cover_dc.push_back(cell % nc_ref - r);
@@ -143,19 +151,13 @@ struct LosTable {
   }
 
   // Bind the table to a raster with ncol columns (linear offsets).
-  // Returns false if the offsets do not fit into an int.
+  // Returns false if the radius is too large or the offsets do not fit into an int.
   bool bind(const int ncol) {
+    if (too_large) return false;
     if (static_cast<double>(r) * ncol + r >= 2147483647.0) return false;
-    step.resize(dr.size());
-    for (std::size_t s = 0; s < dr.size(); ++s) {
-      step[s].dist = dist[s];
-      step[s].off = dr[s] * ncol + dc[s];
-      step[s].ref = ref[s];
-    }
+    for (Step &s : step) s.off = s.dr * ncol + s.dc;
     return true;
   }
-
-  int ref_center() const { return r * (2 * r + 1) + r; }
 };
 
 // Block maxima of the DSM, used for an upper bound of the heights in a box.
@@ -189,6 +191,7 @@ struct BlockMax {
         }
       }
     }
+    (void)nthreads;
   }
 
   // Upper bound of the DSM in rows [r0, r1] x cols [c0, c1] (clipped to the raster).
@@ -209,47 +212,12 @@ struct BlockMax {
   }
 };
 
-// Description of a raster grid (row 0 at the top / ymax).
-struct GridInfo {
-  int nrow = 0, ncol = 0;
-  double xmin = 0, xmax = 0, ymin = 0, ymax = 0, res = 0;
-  long long ncell() const { return static_cast<long long>(nrow) * ncol; }
-};
-
-// Per-thread scratch space of the sweep.
 // Bytes of padding around per-thread objects that are stored next to each
 // other (e.g. in a std::vector, one element per thread): their members are
 // written in the innermost loops, and without padding the objects of
 // neighbouring threads would share cache lines ("false sharing"). Two cache
 // lines, as Intel CPUs prefetch pairs of lines.
 constexpr std::size_t kCachePad = 128;
-
-struct SweepScratch {
-  char pad_front_[kCachePad];
-  std::vector<double> horizon;        // horizon (max tangent) per step of the current line
-  std::vector<unsigned char> mask;    // first-visit flags on the reference grid
-  std::vector<int> touched;           // reference ids set in `mask` (for resetting)
-  char pad_back_[kCachePad];
-
-  explicit SweepScratch(const LosTable &T)
-      : horizon(static_cast<std::size_t>(std::max(1, T.max_len)), kNoHorizon),
-        mask(static_cast<std::size_t>(T.nref), 0) {
-    touched.reserve(1024);
-  }
-
-  // Mark a reference cell as visited; returns true on the first visit.
-  inline bool first_visit(const int ref) {
-    if (mask[ref]) return false;
-    mask[ref] = 1;
-    touched.push_back(ref);
-    return true;
-  }
-
-  inline void reset() {
-    for (int ref : touched) mask[ref] = 0;
-    touched.clear();
-  }
-};
 
 // Upper bounds of (DSM - h0) for the four quadrants around an observer;
 // -inf if the quadrant holds no valid cell.
@@ -283,77 +251,244 @@ inline double stop_distance(const double a, const double horizon, const double d
   return inf;
 }
 
-// Sweep all lines of sight of one observer.
-//
-//  dsm      DSM values (row-major, NaN = NA)
-//  cell0    linear index of the observer cell, row0 / col0 its row / column
-//  h0       observer eye level (must be above the DSM at the observer cell;
-//           the caller checks this)
-//  qbound   quadrant bounds from quadrant_bounds() (ignored if !early_stop)
-//  visit    called as visit(s, cell) whenever a cell is visible on a line (s is
-//           the step index into the table, cell the linear raster index); a cell
-//           can be reported by several lines, use first_visit() to de-duplicate
-template <bool CheckBounds, class Visit>
-inline void sweep_lines(const LosTable &T, const double *dsm, const int nrow,
-                        const int ncol, const long long cell0, const int row0,
-                        const int col0, const double h0, const double *qbound,
-                        const bool early_stop, SweepScratch &S, Visit &&visit) {
-  double *hz = S.horizon.data();
-  int valid_upto = -1;  // hz[0..valid_upto] hold the horizon of the previous line
-  const double inf = std::numeric_limits<double>::infinity();
+// ---------------------------------------------------------------------------
+// DSM storage
+// ---------------------------------------------------------------------------
 
+// True if every value is NA, infinite or exactly representable as float, i.e.
+// if a float copy holds exactly the same values.
+inline bool float_exact(const double *v, const std::size_t n, const int nthreads) {
+  int bad = 0;
+#ifdef _OPENMP
+#pragma omp parallel for num_threads(nthreads) reduction(| : bad) schedule(static)
+#endif
+  for (std::ptrdiff_t i = 0; i < static_cast<std::ptrdiff_t>(n); ++i) {
+    const double x = v[i];
+    if (std::isnan(x) || std::isinf(x)) continue;
+    // out-of-range conversions to float are undefined: test the range first
+    bad |= (std::fabs(x) > static_cast<double>(FLT_MAX) ||
+            static_cast<double>(static_cast<float>(x)) != x) ? 1 : 0;
+  }
+  (void)nthreads;
+  return bad == 0;
+}
+
+inline void to_float(const double *v, const std::size_t n, float *out, const int nthreads) {
+#ifdef _OPENMP
+#pragma omp parallel for num_threads(nthreads) schedule(static)
+#endif
+  for (std::ptrdiff_t i = 0; i < static_cast<std::ptrdiff_t>(n); ++i) out[i] = static_cast<float>(v[i]);
+  (void)nthreads;
+}
+
+// ---------------------------------------------------------------------------
+// Visibility masks
+// ---------------------------------------------------------------------------
+
+// Bit mask of the (2r+1) x (2r+1) neighbourhood of an observer; each row is
+// padded to whole 64-bit words, so that the mask can be read row by row.
+struct VisMask {
+  int r = 0;
+  int W = 0;            // 64-bit words per row
+  int rowlen = 0;       // bits per row (W * 64)
+  int center = 0;       // bit of the observer cell
+  std::size_t words = 0;
+
+  explicit VisMask(const int r_) : r(r_), W((2 * r_ + 1 + 63) / 64) {
+    rowlen = W * 64;
+    center = r * rowlen + r;
+    words = static_cast<std::size_t>(2 * r + 1) * W;
+  }
+  inline int bit(const int dr, const int dc) const { return center + dr * rowlen + dc; }
+};
+
+inline void mask_set(std::uint64_t *m, const int bit) {
+  m[bit >> 6] |= std::uint64_t(1) << (bit & 63);
+}
+
+inline int popcount64(std::uint64_t x) {
+#if defined(__GNUC__) || defined(__clang__)
+  return __builtin_popcountll(x);
+#else
+  int n = 0;
+  for (; x; x &= x - 1) ++n;
+  return n;
+#endif
+}
+
+inline int ctz64(const std::uint64_t x) {  // x != 0
+#if defined(__GNUC__) || defined(__clang__)
+  return __builtin_ctzll(x);
+#else
+  int n = 0;
+  while (!((x >> n) & 1)) ++n;
+  return n;
+#endif
+}
+
+// Calls f(dr, dc) for every flagged cell in raster (row-major) order and
+// clears the mask.
+template <class F>
+inline void drain_mask(const VisMask &M, std::uint64_t *m, F &&f) {
+  for (int row = 0; row < 2 * M.r + 1; ++row) {
+    std::uint64_t *w = m + static_cast<std::size_t>(row) * M.W;
+    for (int i = 0; i < M.W; ++i) {
+      std::uint64_t x = w[i];
+      if (!x) continue;
+      w[i] = 0;
+      do {
+        const int b = ctz64(x);
+        x &= x - 1;
+        f(row - M.r, i * 64 + b - M.r);
+      } while (x);
+    }
+  }
+}
+
+// Number of flagged cells; clears the mask.
+inline int count_mask(const VisMask &M, std::uint64_t *m) {
+  int n = 0;
+  for (std::size_t i = 0; i < M.words; ++i) {
+    if (m[i]) {
+      n += popcount64(m[i]);
+      m[i] = 0;
+    }
+  }
+  return n;
+}
+
+// ---------------------------------------------------------------------------
+// Batched sweep
+// ---------------------------------------------------------------------------
+
+// One observer of a batch.
+struct Viewer {
+  long long cell0;        // linear index of the observer cell
+  int row0, col0;
+  double h0;              // eye level (above the DSM at the observer cell)
+  double qbound[4];       // quadrant_bounds() (unused without early termination)
+  bool interior;          // the whole circle lies inside the raster
+  std::uint64_t *mask;    // VisMask::words words; visible cells are OR-ed in
+  double *hz;             // LosTable::max_len values: horizon per step
+  int valid_upto;         // hz[0..valid_upto] hold the horizon of the previous line
+};
+
+// Walk one line of sight of one observer, starting at step k (the steps
+// before are shared with the previous line).
+template <bool CheckBounds, class V>
+inline void sweep_line(const LosTable::Step *step, const int beg, const int end, const int k,
+                       const bool can_stop, const double a, const double dist_last,
+                       const VisMask &M, const V *dsm, const int nrow, const int ncol,
+                       Viewer &o) {
+  double *hz = o.hz;
+  double horizon;
+  if (k == 0) {
+    horizon = kNoHorizon;
+  } else {
+    if (k - 1 > o.valid_upto) {
+      // The previous line stopped early, i.e. none of its remaining cells
+      // (which include our shared prefix) could raise its horizon.
+      const double fill = o.valid_upto >= 0 ? hz[o.valid_upto] : kNoHorizon;
+      for (int t = o.valid_upto + 1; t < k; ++t) hz[t] = fill;
+    }
+    horizon = hz[k - 1];
+  }
+  double dstop = can_stop ? stop_distance(a, horizon, dist_last)
+                          : std::numeric_limits<double>::infinity();
+  const V *base = dsm + o.cell0;
+  const double h0 = o.h0;
+  std::uint64_t *mask = o.mask;
+  int j = k;
+  int s = beg + k;
+  for (; s < end; ++s, ++j) {
+    const double d = step[s].dist;
+    if (d >= dstop) break;
+    if (CheckBounds) {
+      const int rr = o.row0 + step[s].dr;
+      const int cc = o.col0 + step[s].dc;
+      if (static_cast<unsigned>(rr) >= static_cast<unsigned>(nrow) ||
+          static_cast<unsigned>(cc) >= static_cast<unsigned>(ncol)) {
+        hz[j] = horizon;
+        continue;
+      }
+    }
+    const double h = static_cast<double>(base[step[s].off]);
+    if (!std::isnan(h)) {
+      const double tangent = (h - h0) / d;
+      if (tangent > horizon) {
+        horizon = tangent;
+        mask_set(mask, M.bit(step[s].dr, step[s].dc));
+        if (can_stop) dstop = stop_distance(a, horizon, dist_last);
+      }
+    }
+    hz[j] = horizon;
+  }
+  o.valid_upto = (s < end) ? j - 1 : (end - beg) - 1;
+}
+
+// Sweep all lines of sight of n observers, line by line (the observers should
+// be close to each other, e.g. consecutive in Morton order). Visible cells are
+// OR-ed into the observers' masks; the observer cells themselves are not set.
+//
+//  dsm   DSM values (row-major, NaN = NA), float or double
+template <class V>
+inline void sweep_batch(const LosTable &T, const VisMask &M, const V *dsm, const int nrow,
+                        const int ncol, const bool early_stop, Viewer *vw, const int n) {
+  for (int a = 0; a < n; ++a) vw[a].valid_upto = -1;
+  const LosTable::Step *step = T.step.data();
   for (int l = 0; l < T.nlines; ++l) {
     const int beg = T.line_beg[l];
     const int end = T.line_beg[l + 1];
     const int k = T.start[l];
-
-    double horizon;
-    if (k == 0) {
-      horizon = kNoHorizon;
-    } else {
-      if (k - 1 > valid_upto) {
-        // The previous line stopped early, i.e. none of its remaining cells
-        // (which include our shared prefix) could raise its horizon.
-        const double fill = valid_upto >= 0 ? hz[valid_upto] : kNoHorizon;
-        for (int t = valid_upto + 1; t < k; ++t) hz[t] = fill;
-      }
-      horizon = hz[k - 1];
-    }
-
     const bool can_stop = early_stop && T.monotone[l];
-    const double a = can_stop ? qbound[T.quadrant[l]] : 0.0;
-    double dstop = can_stop ? stop_distance(a, horizon, T.dist_last[l]) : inf;
-
-    const LosTable::Step *step = T.step.data();
-    int j = k;
-    int s = beg + k;
-    for (; s < end; ++s, ++j) {
-      const double d = step[s].dist;
-      if (d >= dstop) break;
-      if (CheckBounds) {
-        const int rr = row0 + T.dr[s];
-        const int cc = col0 + T.dc[s];
-        if (static_cast<unsigned>(rr) >= static_cast<unsigned>(nrow) ||
-            static_cast<unsigned>(cc) >= static_cast<unsigned>(ncol)) {
-          hz[j] = horizon;
-          continue;
-        }
+    const int q = T.quadrant[l];
+    const double dl = T.dist_last[l];
+    for (int a = 0; a < n; ++a) {
+      Viewer &o = vw[a];
+      const double bound = can_stop ? o.qbound[q] : 0.0;
+      if (o.interior) {
+        sweep_line<false>(step, beg, end, k, can_stop, bound, dl, M, dsm, nrow, ncol, o);
+      } else {
+        sweep_line<true>(step, beg, end, k, can_stop, bound, dl, M, dsm, nrow, ncol, o);
       }
-      const long long cell = cell0 + step[s].off;
-      const double h = dsm[cell];
-      if (!std::isnan(h)) {
-        const double tangent = (h - h0) / d;
-        if (tangent > horizon) {
-          horizon = tangent;
-          visit(s, cell);
-          if (can_stop) dstop = stop_distance(a, horizon, T.dist_last[l]);
-        }
-      }
-      hz[j] = horizon;
     }
-    valid_upto = (s < end) ? j - 1 : (end - beg) - 1;
   }
 }
+
+// Number of observers per batch: at most 16, and at most about 8 MB of masks
+// per thread for large radii.
+inline int batch_size(const VisMask &M) {
+  const std::size_t bytes = M.words * sizeof(std::uint64_t);
+  const std::size_t budget = static_cast<std::size_t>(8) << 20;
+  const std::size_t b = bytes > 0 ? budget / bytes : 16;
+  return static_cast<int>(std::max<std::size_t>(1, std::min<std::size_t>(16, b)));
+}
+
+// Per-thread scratch of a batch: masks (zero between observers) and horizon
+// arrays, padded against false sharing (see kCachePad).
+struct BatchScratch {
+  char pad_front_[kCachePad];
+  int capacity;
+  std::size_t words, hz_stride;
+  std::vector<std::uint64_t> masks;
+  std::vector<double> hz;
+  std::vector<Viewer> viewers;
+  char pad_back_[kCachePad];
+
+  BatchScratch(const LosTable &T, const VisMask &M, const int capacity_)
+      : capacity(capacity_), words(M.words),
+        hz_stride(static_cast<std::size_t>(std::max(1, T.max_len)) + 8),
+        masks(static_cast<std::size_t>(capacity_) * M.words, 0),
+        hz(static_cast<std::size_t>(capacity_) * hz_stride, kNoHorizon) {
+    viewers.reserve(capacity_);
+  }
+  std::uint64_t *mask(const int i) { return masks.data() + static_cast<std::size_t>(i) * words; }
+  double *horizon(const int i) { return hz.data() + static_cast<std::size_t>(i) * hz_stride; }
+};
+
+// ---------------------------------------------------------------------------
+// Potential viewshed (VVI)
+// ---------------------------------------------------------------------------
 
 // Potential viewshed (VVI): the cells reached by any line of sight (static
 // geometry, LosTable::cover_*) as runs of consecutive columns per row offset,

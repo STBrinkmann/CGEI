@@ -87,6 +87,74 @@ std::vector<long long> naive_visible(const std::vector<int> &los, int r, const d
   return vis;
 }
 
+// Visible cells of every observer with the batched engine (as vgvi() / vvi()
+// use it: Morton order, batches of `batch` observers, masks drained in raster
+// order). The cells come out sorted; the drain order is checked as well.
+template <class V>
+std::vector<std::vector<long long>> batched_visible(const LosTable &T, const V *dsm_sweep, const double *dsm,
+                                                    const BlockMax &bm, int nr, int nc, const std::vector<int> &rows,
+                                                    const std::vector<int> &cols, const std::vector<double> &h0,
+                                                    bool early, int batch, int nthreads) {
+  const VisMask M(T.r);
+  const int n = static_cast<int>(rows.size());
+  std::vector<int> order(n);
+  for (int k = 0; k < n; ++k) order[k] = k;
+  std::sort(order.begin(), order.end(), [&](int a, int b) {
+    return morton_key(rows[a], cols[a]) < morton_key(rows[b], cols[b]);
+  });
+  std::vector<std::vector<long long>> out(n);
+  std::vector<BatchScratch> scratch;
+  for (int t = 0; t < nthreads; ++t) scratch.emplace_back(T, M, batch);
+  const int nbatch = (n + batch - 1) / batch;
+  int unsorted = 0, count_bad = 0;
+#pragma omp parallel for num_threads(nthreads) schedule(dynamic, 1) reduction(+ : unsorted, count_bad)
+  for (int b = 0; b < nbatch; ++b) {
+    BatchScratch &S = scratch[omp_get_thread_num()];
+    const int i0 = b * batch, i1 = std::min(n, i0 + batch);
+    S.viewers.clear();
+    for (int i = i0; i < i1; ++i) {
+      const int k = order[i];
+      const long long cell0 = static_cast<long long>(rows[k]) * nc + cols[k];
+      mask_set(S.mask(i - i0), M.center);
+      if (h0[k] > dsm[cell0]) {
+        Viewer v;
+        v.cell0 = cell0;
+        v.row0 = rows[k];
+        v.col0 = cols[k];
+        v.h0 = h0[k];
+        v.interior = rows[k] - T.r >= 0 && rows[k] + T.r < nr && cols[k] - T.r >= 0 && cols[k] + T.r < nc;
+        v.mask = S.mask(i - i0);
+        v.hz = S.horizon(i - i0);
+        v.valid_upto = -1;
+        if (early) quadrant_bounds(T, bm, rows[k], cols[k], h0[k], v.qbound);
+        S.viewers.push_back(v);
+      }
+    }
+    sweep_batch(T, M, dsm_sweep, nr, nc, early, S.viewers.data(), static_cast<int>(S.viewers.size()));
+    for (int i = i0; i < i1; ++i) {
+      const int k = order[i];
+      const long long cell0 = static_cast<long long>(rows[k]) * nc + cols[k];
+      // count_mask() on a copy must agree with the drained cells
+      std::vector<std::uint64_t> copy(S.mask(i - i0), S.mask(i - i0) + M.words);
+      const int counted = count_mask(M, copy.data());
+      drain_mask(M, S.mask(i - i0), [&](int dr, int dc) {
+        out[k].push_back(cell0 + static_cast<long long>(dr) * nc + dc);
+      });
+      if (!std::is_sorted(out[k].begin(), out[k].end())) ++unsorted;
+      if (counted != static_cast<int>(out[k].size())) ++count_bad;
+      for (std::size_t w = 0; w < M.words; ++w) {
+        if (S.mask(i - i0)[w] != 0 || copy[w] != 0) {
+          ++count_bad;  // masks must be cleared
+          break;
+        }
+      }
+    }
+  }
+  CHECK(unsorted == 0, "drain_mask: %d observers not in raster order", unsorted);
+  CHECK(count_bad == 0, "count_mask / clearing: %d observers differ", count_bad);
+  return out;
+}
+
 void test_viewshed(std::mt19937 &rng, int nthreads) {
   struct Scene { int nr, nc, r; double na; };
   const Scene scenes[] = {{40, 55, 9, 0.0}, {40, 55, 9, 0.05}, {35, 11, 9, 0.02},
@@ -110,35 +178,33 @@ void test_viewshed(std::mt19937 &rng, int nthreads) {
           h0.push_back(u(rng));
         }
     const int n = static_cast<int>(rows.size());
+    std::vector<std::vector<long long>> naive(n);
+    for (int k = 0; k < n; ++k) {
+      if (std::isnan(dsm[static_cast<size_t>(rows[k]) * sc.nc + cols[k]])) continue;
+      naive[k] = naive_visible(los, sc.r, dsm.data(), sc.nr, sc.nc, rows[k], cols[k], h0[k]);
+    }
+    std::vector<float> dsm_f(dsm.size());
+    CHECK(float_exact(dsm.data(), dsm.size(), nthreads) ==
+              std::all_of(dsm.begin(), dsm.end(), [](double v) { return std::isnan(v) || (double)(float)v == v; }),
+          "float_exact");
+    to_float(dsm.data(), dsm.size(), dsm_f.data(), nthreads);
     for (int early = 0; early <= 1; ++early) {
-      std::vector<std::vector<long long>> out(n);
-      std::vector<SweepScratch> scratch;
-      for (int t = 0; t < nthreads; ++t) scratch.emplace_back(T);
-#pragma omp parallel for num_threads(nthreads) schedule(dynamic, 4)
-      for (int k = 0; k < n; ++k) {
-        SweepScratch &S = scratch[omp_get_thread_num()];
-        const long long cell0 = static_cast<long long>(rows[k]) * sc.nc + cols[k];
-        out[k].push_back(cell0);
-        S.first_visit(T.ref_center());
-        if (h0[k] > dsm[cell0]) {
-          double qb[4] = {0, 0, 0, 0};
-          if (early) quadrant_bounds(T, bm, rows[k], cols[k], h0[k], qb);
-          auto visit = [&](int s, long long cell) {
-            if (S.first_visit(T.step[s].ref)) out[k].push_back(cell);
-          };
-          sweep_lines<true>(T, dsm.data(), sc.nr, sc.nc, cell0, rows[k], cols[k], h0[k], qb,
-                            early == 1, S, visit);
+      for (int use_float = 0; use_float <= 1; ++use_float) {
+        for (int batch : {1, 3, 16}) {
+          const std::vector<std::vector<long long>> out =
+              use_float ? batched_visible(T, dsm_f.data(), dsm.data(), bm, sc.nr, sc.nc, rows, cols, h0,
+                                          early == 1, batch, nthreads)
+                        : batched_visible(T, dsm.data(), dsm.data(), bm, sc.nr, sc.nc, rows, cols, h0,
+                                          early == 1, batch, nthreads);
+          int bad = 0;
+          for (int k = 0; k < n; ++k) {
+            if (std::isnan(dsm[static_cast<size_t>(rows[k]) * sc.nc + cols[k]])) continue;
+            if (out[k] != naive[k]) ++bad;
+          }
+          CHECK(bad == 0, "viewshed %dx%d r=%d na=%.2f early=%d float=%d batch=%d threads=%d: %d of %d observers differ",
+                sc.nr, sc.nc, sc.r, sc.na, early, use_float, batch, nthreads, bad, n);
         }
-        S.reset();
-        std::sort(out[k].begin(), out[k].end());
       }
-      int bad = 0;
-      for (int k = 0; k < n; ++k) {
-        if (std::isnan(dsm[static_cast<size_t>(rows[k]) * sc.nc + cols[k]])) continue;
-        if (out[k] != naive_visible(los, sc.r, dsm.data(), sc.nr, sc.nc, rows[k], cols[k], h0[k])) ++bad;
-      }
-      CHECK(bad == 0, "viewshed %dx%d r=%d na=%.2f early=%d threads=%d: %d of %d observers differ",
-            sc.nr, sc.nc, sc.r, sc.na, early, nthreads, bad, n);
     }
   }
 }
@@ -202,30 +268,45 @@ void test_vvi_counts(std::mt19937 &rng, int nthreads) {
     accumulate_seen(cov, dsm.data(), sc.nr, sc.nc, rows, cols, nthreads, seen.data());
     CHECK(seen == naive_seen, "accumulate_seen %dx%d r=%d threads=%d", sc.nr, sc.nc, sc.r, nthreads);
 
-    // visible cells counted concurrently (as in VVI_cells_cpp)
+    // visible cells counted concurrently (as in VVI_cells_cpp: atomic increments
+    // while several threads drain their masks)
     BlockMax bm(dsm.data(), sc.nr, sc.nc, nthreads);
     std::vector<int> vis(ncell, 0), naive_vis(ncell, 0);
-    std::vector<SweepScratch> scratch;
-    for (int t = 0; t < nthreads; ++t) scratch.emplace_back(T);
-#pragma omp parallel for num_threads(nthreads) schedule(dynamic, 2)
-    for (int k = 0; k < n; ++k) {
-      SweepScratch &S = scratch[omp_get_thread_num()];
-      const long long cell0 = static_cast<long long>(rows[k]) * sc.nc + cols[k];
-      S.first_visit(T.ref_center());
+    {
+      const VisMask M(T.r);
+      std::vector<BatchScratch> scratch;
+      for (int t = 0; t < nthreads; ++t) scratch.emplace_back(T, M, 4);
+#pragma omp parallel for num_threads(nthreads) schedule(dynamic, 1)
+      for (int b = 0; b < (n + 3) / 4; ++b) {
+        BatchScratch &S = scratch[omp_get_thread_num()];
+        const int i0 = 4 * b, i1 = std::min(n, i0 + 4);
+        S.viewers.clear();
+        for (int k = i0; k < i1; ++k) {
+          const long long cell0 = static_cast<long long>(rows[k]) * sc.nc + cols[k];
+          mask_set(S.mask(k - i0), M.center);
+          if (h0[k] > dsm[cell0]) {
+            Viewer v;
+            v.cell0 = cell0;
+            v.row0 = rows[k];
+            v.col0 = cols[k];
+            v.h0 = h0[k];
+            v.interior = false;
+            v.mask = S.mask(k - i0);
+            v.hz = S.horizon(k - i0);
+            v.valid_upto = -1;
+            quadrant_bounds(T, bm, rows[k], cols[k], h0[k], v.qbound);
+            S.viewers.push_back(v);
+          }
+        }
+        sweep_batch(T, M, dsm.data(), sc.nr, sc.nc, true, S.viewers.data(), static_cast<int>(S.viewers.size()));
+        for (int k = i0; k < i1; ++k) {
+          const long long cell0 = static_cast<long long>(rows[k]) * sc.nc + cols[k];
+          drain_mask(M, S.mask(k - i0), [&](int dr, int dc) {
 #pragma omp atomic
-      ++vis[cell0];
-      if (h0[k] > dsm[cell0]) {
-        double qb[4] = {0, 0, 0, 0};
-        quadrant_bounds(T, bm, rows[k], cols[k], h0[k], qb);
-        auto visit = [&](int s, long long cell) {
-          if (!S.first_visit(T.step[s].ref)) return;
-#pragma omp atomic
-          ++vis[cell];
-        };
-        sweep_lines<true>(T, dsm.data(), sc.nr, sc.nc, cell0, rows[k], cols[k], h0[k], qb, true, S,
-                          visit);
+            ++vis[cell0 + static_cast<long long>(dr) * sc.nc + dc];
+          });
+        }
       }
-      S.reset();
     }
     for (int k = 0; k < n; ++k) {
       const long long cell0 = static_cast<long long>(rows[k]) * sc.nc + cols[k];
@@ -238,6 +319,27 @@ void test_vvi_counts(std::mt19937 &rng, int nthreads) {
     }
     CHECK(vis == naive_vis, "visible counts %dx%d r=%d threads=%d", sc.nr, sc.nc, sc.r, nthreads);
   }
+}
+
+// ---------------------------------------------------------------------------
+// 1c. float storage of the DSM: only used if it holds exactly the same values
+// ---------------------------------------------------------------------------
+void test_float_exact(int nthreads) {
+  const double inf = std::numeric_limits<double>::infinity();
+  std::vector<double> v = {0.0, -0.0, 1.5, 312.25f, 1e30f, -inf, inf, NaN, 0.1f, 3.4028234663852886e38};
+  CHECK(float_exact(v.data(), v.size(), nthreads), "float_exact: float values");
+  for (double bad : {0.1, 1e300, -1e300, 3.5e38, 1e-50, 312.2500000001}) {
+    std::vector<double> w = v;
+    w.push_back(bad);
+    CHECK(!float_exact(w.data(), w.size(), nthreads), "float_exact: %g is not a float", bad);
+  }
+  std::vector<float> f(v.size());
+  to_float(v.data(), v.size(), f.data(), nthreads);
+  int bad = 0;
+  for (size_t i = 0; i < v.size(); ++i) {
+    if (std::isnan(v[i]) ? !std::isnan(f[i]) : static_cast<double>(f[i]) != v[i]) ++bad;
+  }
+  CHECK(bad == 0, "to_float: %d values differ", bad);
 }
 
 // ---------------------------------------------------------------------------
@@ -441,6 +543,7 @@ int main() {
   for (int nthreads : {1, 4}) {
     test_viewshed(rng, nthreads);
     test_vvi_counts(rng, nthreads);
+    test_float_exact(nthreads);
     test_boxfilters(rng, nthreads);
   }
   test_natural_breaks(rng);
