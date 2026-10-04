@@ -1,7 +1,7 @@
 # Benchmarks
 
-Reproducible runtime comparison of CGEI 0.3.1 (before the rewrite) and 0.4.0.
-The folder is excluded from the package build (`.Rbuildignore`).
+Reproducible runtime comparisons of CGEI 0.3.1 (before the rewrite), 0.4.0
+and 0.4.1. The folder is excluded from the package build (`.Rbuildignore`).
 
 ```sh
 # 1. synthetic data (about 200 MB, written to benchmarks/data)
@@ -28,6 +28,21 @@ Rscript benchmarks/summarise.R benchmarks/results
 
 # 5. exactness at scale: C++ results vs the naive R reference of the tests
 R_LIBS=lib_new Rscript benchmarks/validate.R benchmarks/data 15 100
+```
+
+0.4.0 vs 0.4.1 (same scripts; `compare.R` prints the tables of RESULTS.md and
+checks that the results are identical):
+
+```sh
+git worktree add /tmp/cgei_040 0.4.0
+R CMD INSTALL --library=lib_040 /tmp/cgei_040
+R CMD INSTALL --library=lib_041 .
+for v in 040 041; do
+  R_LIBS=lib_$v Rscript benchmarks/bench_vgvi.R benchmarks/data benchmarks/results/vgvi_$v.rds 1000 5 100,200,300 1,4
+  R_LIBS=lib_$v Rscript benchmarks/bench_vgvi.R benchmarks/data benchmarks/results/vgvi_long_$v.rds 200 3 500,800 1,4
+  R_LIBS=lib_$v Rscript benchmarks/bench_vvi.R benchmarks/data benchmarks/results/vvi_$v.rds 500 3
+done
+Rscript benchmarks/compare.R benchmarks/results 040 041 0.4.0 0.4.1
 ```
 
 ## Data (`make_data.R`, seeded)

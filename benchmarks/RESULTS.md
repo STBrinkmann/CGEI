@@ -1,4 +1,144 @@
-# Benchmark results: CGEI 0.3.1 vs 0.4.0
+# Benchmark results
+
+## CGEI 0.4.0 vs 0.4.1
+
+Run on 2026-10-04 with the scripts in this folder (see [README.md](README.md)).
+
+* Machine: cloud VM (Firecracker), Intel Xeon (Cascade Lake) @ 2.8 GHz, 4 vCPUs,
+  15 GB RAM, Ubuntu 24.04. A different (and somewhat slower) VM than the one
+  of the 0.3.1 vs 0.4.0 comparison below, so absolute times differ.
+* R 4.3.3, gcc 13.3 (`-O2`, OpenMP), terra 1.7-65, Rcpp 1.0.12
+* 0.4.0 = release 0.4.0 (commit `33a6632`), 0.4.1 = this branch
+* All benchmarks ran one after the other with nothing else running on the
+  machine; both versions in separate R processes. Medians of 5 (VGVI 100-300
+  m) or 3 (VGVI 500-800 m, VVI) runs.
+* Same data as below (`make_data.R`): 1000 (100-300 m) / 200 (500-800 m)
+  randomly chosen observers of the city and open-terrain scenes,
+  `mode = "exponential"` (m = 1, b = 3), 1 m DSM (Float32 GeoTIFF).
+* All VGVI and VVI results are identical (`identical()`) between both
+  versions.
+* The complete calls contain about 0.2-0.4 s of cropping and reading the
+  4-million-cell rasters with `terra`, which varies by about +-20 % between
+  repeated runs (e.g. `vgvi()` city 100 m with 4 threads: 0.37-0.46 s for
+  both versions in repeated runs, while the C++ core takes 0.08 s). For small
+  radii the complete calls are dominated by this part.
+
+### Overview
+
+| function | 1 thread | 4 threads |
+|---|---|---|
+| `vgvi()`, C++ core, `max_distance` 100-300 m | 1.2-2.2x | 1.0-1.6x |
+| `vgvi()`, C++ core, `max_distance` 500-800 m | 1.7-2.2x | 1.4-1.8x |
+| `vgvi()`, complete call | 1.0-2.2x | 1.0-1.6x |
+| `vvi()`, complete call (all modes) | 0.9-1.3x | 0.9-1.1x |
+
+The gain grows with `max_distance`: the larger the neighbourhood of an
+observer, the more the old sweep was limited by memory accesses. With 4
+threads the gain is smaller, because the old code profited more from the
+additional per-core caches (it scaled super-linearly, up to 4.7x on 4
+threads). `vvi()` changes little: its complete calls are dominated by reading
+the rasters.
+
+What the time was spent on (C++ core; `perf` cpu-clock sampling and timing
+experiments on the same data):
+
+* The sweep is limited by memory accesses: on an artificial surface on which
+  every visibility test is perfectly predictable, a step of a line of sight
+  costs 5 cycles for r = 100 cells and 12-15 cycles for r = 300-600 cells; it
+  drops back to about 6 cycles if either the line-of-sight table or the DSM is
+  forced into the L1 cache. The division and branch mispredictions are minor.
+* In `vgvi()`, 30-50 % of the time went into the bookkeeping of the visible
+  cells (byte mask, list of touched cells, ring and greenspace look-ups with
+  random access); 0.4.1 replaces it by one bit operation per visible cell and
+  a sequential pass over the mask per observer.
+* The lines of sight process 2.0-2.1 steps per cell of the circle (the
+  shared-prefix reuse saves only 6-18 % of the steps, as neighbouring lines
+  split up and then run over the same cells again). This is inherent to the
+  "visible from any line of sight" definition and was not changed.
+* Tried and discarded (exact, but not faster on this machine): skipping
+  blocks of 8 x 8 cells that cannot be visible (reduced the evaluated steps by
+  2-3x in the city, but the additional bound checks cost as much), a
+  branch-free inner loop, SIMD over 4 observers in lock step, bit-encoded
+  lines of sight with distances computed on the fly, a transposed DSM copy for
+  north-south lines, and sweeping the 8 symmetric octants of a base line
+  together.
+
+### VGVI: C++ core (VGVI_cpp), milliseconds per observer (1000 observers)
+
+| scene | max_distance | threads | 0.4.0 | 0.4.1 | speed-up |
+|---|---|---|---|---|---|
+| city | 100 | 1 | 0.349 | 0.277 | **1.3x** |
+| city | 100 | 4 | 0.084 | 0.084 | **1.0x** |
+| city | 200 | 1 | 0.912 | 0.672 | **1.4x** |
+| city | 200 | 4 | 0.242 | 0.211 | **1.1x** |
+| city | 300 | 1 | 2.162 | 1.270 | **1.7x** |
+| city | 300 | 4 | 0.465 | 0.351 | **1.3x** |
+| open | 100 | 1 | 0.539 | 0.463 | **1.2x** |
+| open | 100 | 4 | 0.141 | 0.114 | **1.2x** |
+| open | 200 | 1 | 2.177 | 1.114 | **2.0x** |
+| open | 200 | 4 | 0.464 | 0.353 | **1.3x** |
+| open | 300 | 1 | 4.672 | 2.096 | **2.2x** |
+| open | 300 | 4 | 0.993 | 0.621 | **1.6x** |
+
+### VGVI: complete vgvi() call for 1000 observers, seconds
+
+| scene | max_distance | threads | 0.4.0 | 0.4.1 | speed-up |
+|---|---|---|---|---|---|
+| city | 100 | 1 | 0.60 | 0.57 | **1.0x** |
+| city | 100 | 4 | 0.37 | 0.46 | **0.8x** |
+| city | 200 | 1 | 1.17 | 1.00 | **1.2x** |
+| city | 200 | 4 | 0.54 | 0.55 | **1.0x** |
+| city | 300 | 1 | 2.41 | 1.53 | **1.6x** |
+| city | 300 | 4 | 0.96 | 0.64 | **1.5x** |
+| open | 100 | 1 | 0.81 | 0.63 | **1.3x** |
+| open | 100 | 4 | 0.42 | 0.38 | **1.1x** |
+| open | 200 | 1 | 2.63 | 1.49 | **1.8x** |
+| open | 200 | 4 | 0.74 | 0.70 | **1.1x** |
+| open | 300 | 1 | 5.06 | 2.31 | **2.2x** |
+| open | 300 | 4 | 1.35 | 0.88 | **1.5x** |
+
+VGVI values identical in 12 of 12 configurations.
+
+### VGVI: C++ core (VGVI_cpp), milliseconds per observer (200 observers)
+
+| scene | max_distance | threads | 0.4.0 | 0.4.1 | speed-up |
+|---|---|---|---|---|---|
+| city | 500 | 1 | 6.585 | 3.045 | **2.2x** |
+| city | 500 | 4 | 2.160 | 1.200 | **1.8x** |
+| city | 800 | 1 | 11.330 | 6.640 | **1.7x** |
+| city | 800 | 4 | 4.395 | 3.135 | **1.4x** |
+| open | 500 | 1 | 10.540 | 5.615 | **1.9x** |
+| open | 500 | 4 | 3.115 | 1.835 | **1.7x** |
+| open | 800 | 1 | 21.645 | 11.110 | **1.9x** |
+| open | 800 | 4 | 6.535 | 4.155 | **1.6x** |
+
+### VGVI: complete vgvi() call for 200 observers, seconds
+
+| scene | max_distance | threads | 0.4.0 | 0.4.1 | speed-up |
+|---|---|---|---|---|---|
+| city | 500 | 1 | 1.69 | 0.96 | **1.8x** |
+| city | 500 | 4 | 0.76 | 0.52 | **1.4x** |
+| city | 800 | 1 | 2.62 | 1.60 | **1.6x** |
+| city | 800 | 4 | 1.31 | 0.91 | **1.4x** |
+| open | 500 | 1 | 2.61 | 1.45 | **1.8x** |
+| open | 500 | 4 | 1.01 | 0.69 | **1.5x** |
+| open | 800 | 1 | 4.69 | 2.72 | **1.7x** |
+| open | 800 | 4 | 1.64 | 1.05 | **1.6x** |
+
+VGVI values identical in 8 of 8 configurations.
+
+### VVI (city, 500 observers), seconds
+
+| max_distance | threads | vvi() 0.4.0 | vvi() 0.4.1 | speed-up | cumulative 0.4.0 | cumulative 0.4.1 | speed-up  | viewshed 0.4.0 | viewshed 0.4.1 |  speed-up |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 100 | 1 | 0.40 | 0.41 | **1.0x** | 0.42 | 0.45 | **0.9x** | 0.69 | 0.75 | **0.9x** |
+| 100 | 4 | 0.21 | 0.22 | **1.0x** | 0.24 | 0.22 | **1.1x** | 0.48 | 0.47 | **1.0x** |
+| 200 | 1 | 0.66 | 0.53 | **1.3x** | 0.78 | 0.64 | **1.2x** | 1.32 | 1.06 | **1.2x** |
+| 200 | 4 | 0.31 | 0.33 | **0.9x** | 0.38 | 0.34 | **1.1x** | 0.90 | 0.86 | **1.0x** |
+
+VVI results (mean VVI, cumulative VVI, sum of n_views) identical in 4 of 4 configurations.
+
+## CGEI 0.3.1 vs 0.4.0
 
 Run on 2026-10-04 with the scripts in this folder (see [README.md](README.md)).
 
@@ -24,7 +164,7 @@ Run on 2026-10-04 with the scripts in this folder (see [README.md](README.md)).
   0.4.0 equals the naive R reference implementation of the tests to within
   4.4e-16 (max_distance 100 m and 200 m).
 
-## Overview
+### Overview
 
 Speed-up of 0.4.0 over 0.3.1 (ranges over the scenes, distances and raster
 sizes of the tables below):
@@ -61,7 +201,7 @@ sizes of the tables below):
   continuous layer. VGVI and VVI change because of the bug fixes (see the
   mean values below and `NEWS.md`).
 
-### VGVI: C++ core (VGVI_cpp), milliseconds per observer
+#### VGVI: C++ core (VGVI_cpp), milliseconds per observer
 
 | scene | max_distance | threads | 0.3.1 | 0.4.0 | speed-up |
 |---|---|---|---|---|---|
@@ -78,7 +218,7 @@ sizes of the tables below):
 | open | 300 | 1 | 10.828 | 1.522 | **7x** |
 | open | 300 | 4 | 2.588 | 0.396 | **7x** |
 
-### VGVI: complete vgvi() call for 1000 observers, seconds
+#### VGVI: complete vgvi() call for 1000 observers, seconds
 
 | scene | max_distance | threads | 0.3.1 | 0.4.0 | speed-up |
 |---|---|---|---|---|---|
@@ -95,7 +235,7 @@ sizes of the tables below):
 | open | 300 | 1 | 11.86 | 1.65 | **7x** |
 | open | 300 | 4 | 3.41 | 0.62 | **6x** |
 
-### VGVI: mean value of the index (results change because of the bug fixes)
+#### VGVI: mean value of the index (results change because of the bug fixes)
 
 | scene | max_distance | 0.3.1 | 0.4.0 |
 |---|---|---|---|
@@ -106,7 +246,7 @@ sizes of the tables below):
 | open | 200 | 0.3570 | 0.3639 |
 | open | 300 | 0.3650 | 0.3731 |
 
-### GAVI: seconds (two-layer raster, default lacunarity box sizes)
+#### GAVI: seconds (two-layer raster, default lacunarity box sizes)
 
 | raster | threads | box sizes | lacunarity 0.3.1 | lacunarity 0.4.0 | speed-up | focal step 0.3.1 | focal step 0.4.0 | speed-up  | gavi() 0.3.1 | gavi() 0.4.0 |  speed-up |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -121,7 +261,7 @@ sizes of the tables below):
 - 500 (threads 4): lacunarity identical: TRUE; focal step: layer 1 identical: TRUE, max. relative difference 0.0e+00
 - 1000 (threads 4): lacunarity identical: TRUE; focal step: layer 1 identical: TRUE, max. relative difference 5.6e-16
 
-### VVI (city, 500 observers), seconds
+#### VVI (city, 500 observers), seconds
 
 | max_distance | threads | vvi() 0.3.1 | vvi() 0.4.0 | speed-up | cumulative 0.3.1 | cumulative 0.4.0 |  speed-up | viewshed 0.3.1 | viewshed 0.4.0 | speed-up   |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -130,7 +270,7 @@ sizes of the tables below):
 | 200 | 1 | 37.28 | 0.36 | **102x** | 37.61 | 0.42 | **89x** | 31.47 | 0.73 | **43x** |
 | 200 | 4 | 13.62 | 0.19 | **73x** | 15.01 | 0.22 | **69x** | 13.50 | 0.52 | **26x** |
 
-### VVI: mean values (results change slightly because of the bug fixes)
+#### VVI: mean values (results change slightly because of the bug fixes)
 
 | max_distance | mean VVI 0.3.1 | mean VVI 0.4.0 | cumulative VVI 0.3.1 | cumulative VVI 0.4.0 |
 |---|---|---|---|---|

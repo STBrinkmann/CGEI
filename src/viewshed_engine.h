@@ -455,13 +455,17 @@ inline void sweep_batch(const LosTable &T, const VisMask &M, const V *dsm, const
   }
 }
 
-// Number of observers per batch: at most 16, and at most about 8 MB of masks
-// per thread for large radii.
-inline int batch_size(const VisMask &M) {
+// Number of observers per batch: at most 16, at most about 8 MB of masks per
+// thread for large radii, and small enough that every thread gets about 8
+// batches (load balance for few observers). Does not change any result.
+inline int batch_size(const VisMask &M, const int n_observers, const int nthreads) {
   const std::size_t bytes = M.words * sizeof(std::uint64_t);
   const std::size_t budget = static_cast<std::size_t>(8) << 20;
-  const std::size_t b = bytes > 0 ? budget / bytes : 16;
-  return static_cast<int>(std::max<std::size_t>(1, std::min<std::size_t>(16, b)));
+  std::size_t b = std::min<std::size_t>(16, bytes > 0 ? budget / bytes : 16);
+  if (nthreads > 1) {
+    b = std::min<std::size_t>(b, static_cast<std::size_t>(n_observers) / (8 * static_cast<std::size_t>(nthreads)));
+  }
+  return static_cast<int>(std::max<std::size_t>(1, b));
 }
 
 // Per-thread scratch of a batch: masks (zero between observers) and horizon

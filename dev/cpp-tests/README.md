@@ -12,9 +12,11 @@ R / Rcpp dependency:
 
 `engine_tests.cpp` compiles exactly these headers, runs them multi-threaded
 (OpenMP) on random data and compares every result with a naive single-threaded
-re-implementation. This includes the per-cell visibility counts of
-`vvi(mode = "cumulative" / "viewshed")`, which several threads accumulate
-concurrently (atomic increments). It also contains a structural port of the
+re-implementation. The batched viewshed sweep is checked with and without early
+termination, with double and float DSM storage and with batch sizes 1, 3 and
+16 (masks must come out in raster order and cleared). This includes the per-cell
+visibility counts of `vvi(mode = "cumulative" / "viewshed")`, which several
+threads accumulate concurrently (atomic increments). It also contains a structural port of the
 original (CGEI 0.3.1) VGVI/VVI viewshed loop to check its OpenMP structure.
 
 ```sh
@@ -46,14 +48,14 @@ ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
 R_LIBS=../lib_asan Rscript -e 'testthat::test_dir("testthat")'
 ```
 
-## Last results (2026-10-04, gcc 13.3 / clang 18.1, 4 threads)
+## Last results (2026-10-04, CGEI 0.4.1, gcc 13.3 / clang 18.1, 4 threads)
 
 | run | result |
 |---|---|
-| `make release` | 191 checks, 0 failures |
-| `make asan` | 191 checks, 0 failures, no sanitizer reports |
-| `make tsan` | 191 checks, 0 failures, no data races (new engines and old loop) |
-| R test suite with ASan/UBSan-instrumented package | all expectations pass, no reports |
+| `make release` | 767 checks, 0 failures |
+| `make asan` | 767 checks, 0 failures, no sanitizer reports |
+| `make tsan` | 767 checks, 0 failures, no data races (new engines and old loop) |
+| R test suite with ASan/UBSan-instrumented package | 504 expectations pass, no reports |
 
 The fast Fisher natural breaks (`FisherDC`, O(k n log n)) give the same
 partition as the exact port of classInt's Fortran routine in all cases with

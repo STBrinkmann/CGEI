@@ -229,7 +229,7 @@ VviResult run_vvi(const NumericVector &dsm, const NumericVector &dsm_values, con
   job.h0_v = h0.begin();
   job.r = r;
   job.nthreads = nthreads;
-  job.batch = cgei::batch_size(M);
+  job.batch = cgei::batch_size(M, static_cast<int>(obs.order.size()), nthreads);
   job.early_stop = early_stop;
   job.what = what;
   job.visible_count = visible_count;

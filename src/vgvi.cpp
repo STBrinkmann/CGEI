@@ -336,7 +336,7 @@ VgviResult run_vgvi(const NumericVector &dsm, const NumericVector &dsm_values, c
   job.r = r;
   job.fun = fun;
   job.nthreads = nthreads;
-  job.batch = cgei::batch_size(M);
+  job.batch = cgei::batch_size(M, static_cast<int>(obs.order.size()), nthreads);
   job.early_stop = early_stop;
   job.want_rings = want_rings;
 

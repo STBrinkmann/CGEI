@@ -1,3 +1,48 @@
+# CGEI 0.4.1
+
+## Performance
+
+`vgvi()`, `vvi()` and `viewshed_list()` are faster, with identical results
+(see `benchmarks/RESULTS.md`, section "0.4.0 vs 0.4.1"):
+
+| function | 1 thread | 4 threads |
+|---|---|---|
+| `vgvi()`, C++ core, `max_distance` 100-300 m | 1.2-2.2x | 1.0-1.6x |
+| `vgvi()`, C++ core, `max_distance` 500-800 m | 1.7-2.2x | 1.4-1.8x |
+| `vgvi()`, complete call | 1.0-2.2x | 1.0-1.6x |
+| `vvi()`, complete call | 0.9-1.3x | 0.9-1.1x |
+
+The gain grows with `max_distance` and with the density of the observers.
+For small radii, the complete calls are dominated by cropping and reading the
+rasters with `terra`; calling `vgvi()` / `vvi()` once for all observers is much
+faster than calling it per observer or per feature.
+
+Profiling showed that the viewshed sweep was limited by memory accesses, not by
+arithmetic. The changes:
+
+-   Visible cells are flagged in a bit mask per observer (one bit operation per
+    visible cell, which also removes duplicates). The rings and greenspace values
+    of `vgvi()` are then summed from the mask in raster order, i.e. with
+    sequential instead of random memory access; `vvi()` counts visible cells
+    with a population count, and the cell lists of `viewshed_list()` come out
+    sorted. In `vgvi()`, this step alone took 30-50 % of the runtime before.
+-   Observers are processed in batches of up to 16 neighbouring observers
+    (Morton order), line of sight by line of sight, so that the line-of-sight
+    table and the DSM around nearby observers stay in the CPU caches. The gain
+    grows with `max_distance` and with the density of the observers.
+-   If all DSM values are exactly representable as single-precision floats
+    (e.g. DSMs read from Float32 GeoTIFFs), the sweep reads a float copy of the
+    DSM: half the memory traffic, the same values. This needs 4 bytes per DSM
+    cell of additional memory.
+-   The line-of-sight table takes 16 bytes per step instead of 36 (less memory
+    for large `max_distance`).
+
+Results are bit-identical to 0.4.0 for binary or integer-valued greenspace
+rasters, for all VVI modes and for `viewshed_list()`. For fractional greenspace
+values, the values of a distance ring are now summed in raster order instead of
+the order in which the lines of sight reach them, which can change the last
+digits of VGVI (relative differences below 1e-15).
+
 # CGEI 0.4.0
 
 This release fixes several bugs that affected the results of `vgvi()`,
