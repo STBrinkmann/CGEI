@@ -18,39 +18,67 @@ namespace {
 // fun == 1 (binary data, Plotnick et al. 1993): Z2 / Z1^2 from the frequency
 // distribution of the integer box sums.
 // fun != 1 (continuous data, Hoechstetter et al. 2011): 1 + var / mean^2.
-// Kept identical to the original implementation (same operations in the same
-// order), so results are bit-identical for the same box masses.
-double lacunarity(const NumericVector &box_masses, const int fun) {
-  if (box_masses.size() <= 1) return NA_REAL;
+// Kept bit-identical to the original implementation: the same floating-point
+// operations in the same order (sd() and mean() are evaluated once instead of
+// twice each; minimum, maximum and the integer frequency table are exact and
+// computed in parallel).
+double lacunarity(const NumericVector &box_masses, const int fun, const int nthreads) {
+  const R_xlen_t n = box_masses.size();
+  if (n <= 1) return NA_REAL;
   if (fun != 1) {
-    return 1 + ((sd(box_masses) * sd(box_masses)) / (mean(box_masses) * mean(box_masses)));
+    const double s = sd(box_masses);
+    const double m = mean(box_masses);
+    return 1 + ((s * s) / (m * m));
   }
-  const double min_value = min(box_masses);
-  const double max_value_d = max(box_masses);
+  const double *x = box_masses.begin();
+  double min_value = R_PosInf, max_value_d = R_NegInf;
+#ifdef _OPENMP
+#pragma omp parallel for num_threads(nthreads) schedule(static) \
+    reduction(min : min_value) reduction(max : max_value_d)
+#endif
+  for (R_xlen_t j = 0; j < n; j++) {
+    min_value = std::min(min_value, x[j]);
+    max_value_d = std::max(max_value_d, x[j]);
+  }
   if (min_value < 0 || max_value_d > 67108864.0) {
     // Not a 0/1 raster: the frequency table would be invalid (negative masses)
     // or huge; use the equivalent moment formula E[S^2] / E[S]^2 instead.
     long double z1 = 0, z2 = 0;
-    for (R_xlen_t j = 0; j < box_masses.size(); ++j) {
-      z1 += box_masses[j];
-      z2 += static_cast<long double>(box_masses[j]) * box_masses[j];
+    for (R_xlen_t j = 0; j < n; ++j) {
+      z1 += x[j];
+      z2 += static_cast<long double>(x[j]) * x[j];
     }
-    z1 /= box_masses.size();
-    z2 /= box_masses.size();
+    z1 /= n;
+    z2 /= n;
     return static_cast<double>(z2 / (z1 * z1));
   }
   // 1. Max box mass
-  const int max_value = max_value_d;
-  // 2. Frequency distribution n(S, r)
+  const int max_value = static_cast<int>(max_value_d);
+  // 2. Frequency distribution n(S, r) (per-thread tables if they are small)
   std::vector<int> n_S_r(max_value + 1, 0);
-  for (R_xlen_t j = 0; j < box_masses.size(); j++) {
-    n_S_r[static_cast<R_xlen_t>(box_masses[j])] += 1;
+  const int nt = static_cast<double>(max_value + 1) * nthreads <= static_cast<double>(n) ? nthreads : 1;
+  if (nt > 1) {
+    std::vector<std::vector<int>> local(nt, std::vector<int>(max_value + 1, 0));
+#ifdef _OPENMP
+#pragma omp parallel num_threads(nt)
+#endif
+    {
+      std::vector<int> &h = local[cgei::omp_thread_num()];
+#ifdef _OPENMP
+#pragma omp for schedule(static)
+#endif
+      for (R_xlen_t j = 0; j < n; j++) h[static_cast<R_xlen_t>(x[j])] += 1;
+    }
+    for (int t = 0; t < nt; ++t)
+      for (int S = 0; S <= max_value; S++) n_S_r[S] += local[t][S];
+  } else {
+    for (R_xlen_t j = 0; j < n; j++) n_S_r[static_cast<R_xlen_t>(x[j])] += 1;
   }
   // 3. Probability distribution Q(S, r)
   // 4. First and second moments of Q(S, r): S * Q(S, r) and S^2 * Q(S, r)
   double Z_1 = 0.0, Z_2 = 0.0;
   for (int S = 0; S <= max_value; S++) {
-    const double Q = n_S_r[S] / double(box_masses.size());
+    const double Q = n_S_r[S] / double(n);
     Z_1 += S * Q;
     Z_2 += S * Q * S;
   }
@@ -99,7 +127,7 @@ NumericVector rcpp_lacunarity(const Rcpp::NumericVector &x, const Rcpp::NumericV
     }
     const int onr = nrow - w + 1, onc = ncol - w + 1;
     const std::size_t N_r = static_cast<std::size_t>(onr) * onc;
-    NumericVector box_masses(static_cast<R_xlen_t>(N_r));
+    NumericVector box_masses = Rcpp::no_init(static_cast<R_xlen_t>(N_r));
     double *bm = box_masses.begin();
 
     // Box sums (fun == 1) and/or numbers of non-NA cells per box
@@ -130,14 +158,24 @@ NumericVector rcpp_lacunarity(const Rcpp::NumericVector &x, const Rcpp::NumericV
       extreme.resize(N_r);
       cgei::box_extreme<true>(v, nrow, ncol, w, bm, nthreads);
       cgei::box_extreme<false>(v, nrow, ncol, w, extreme.data(), nthreads);
-      for (std::size_t i = 0; i < N_r; ++i) {
-        bm[i] = (!has_na || count[i] > 0) ? bm[i] - extreme[i] : na_real;
+      const double *ex = extreme.data();
+      const int *cnt = has_na ? count.data() : nullptr;
+      const long long n_box = static_cast<long long>(N_r);
+#ifdef _OPENMP
+#pragma omp parallel for num_threads(nthreads) schedule(static)
+#endif
+      for (long long i = 0; i < n_box; ++i) {
+        bm[i] = (!cnt || cnt[i] > 0) ? bm[i] - ex[i] : na_real;
       }
     }
 
-    // Remove NA and compute lacunarity
-    NumericVector bm_narm = wrap(na_omit(box_masses));
-    output[j] = lacunarity(bm_narm, fun);
+    // Remove NA (only boxes without any valid cell are NA) and compute lacunarity
+    if (has_na) {
+      NumericVector bm_narm = wrap(na_omit(box_masses));
+      output[j] = lacunarity(bm_narm, fun, nthreads);
+    } else {
+      output[j] = lacunarity(box_masses, fun, nthreads);
+    }
     progress.tick();
   }
   progress.finish();
