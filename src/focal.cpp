@@ -1,107 +1,109 @@
 #include <Rcpp.h>
+
+#include <cmath>
+#include <set>
+#include <vector>
+
+#include "boxfilter.h"
+#include "parallel_progress.h"
 #include "rsinfo.h"
 
-#include <vector>
-#include <set>
-#include <algorithm>
-
-#ifdef _OPENMP
-#include <omp.h>
-#endif
 // [[Rcpp::plugins(openmp)]]
-// [[Rcpp::depends(RcppProgress)]]
-#include <progress.hpp>
-#include "eta_progress_bar.h"
 
 using namespace Rcpp;
 
-// Helper function to compute the focal weighted mean for each layer
-std::vector<double> compute_focal_weighted_mean(const RasterInfo &x_ras, const NumericMatrix &x_mat,
-                                                const NumericMatrix &lac, int row, int col, bool na_rm) {
-  std::vector<double> weightedSums(x_mat.ncol(), 0.0); // Store weighted sums for each layer
-  std::set<int> distinctWs; // To store distinct window sizes
-  
+// Focal step of gavi(): for every layer the sum over its `lac` rows of
+//   focal mean in a w x w window (w = lac[, 2]) * Lac (lac[, 3]),
+// divided by the number of distinct window sizes. lac[, 1] is the 1-based
+// layer index (column of x_mat). x_mat holds one layer per column with cells in
+// row-major order (terra::values(x, mat = TRUE)).
+//
+// na_rm = TRUE : mean of the non-NA cells of the window that lie inside the
+//                raster (windows without any such cell are skipped).
+// na_rm = FALSE: NA as soon as the window leaves the raster or contains NA.
+//
+// Box sums make every window size O(1) per cell (the original summed every
+// window cell by cell: O(w^2) per cell and window). Sums, counts and the
+// accumulation order are the same as in the original, so integer-valued
+// rasters give bit-identical results.
+// [[Rcpp::export]]
+NumericMatrix focal_sum(const NumericVector &x, const NumericMatrix &x_mat, const NumericMatrix &lac,
+                        const bool na_rm = true, const int ncores = 1,
+                        const bool display_progress = false) {
+  const RasterInfo x_ras(x);
+  const int nrow = x_ras.nrow, ncol = x_ras.ncol;
+  const std::size_t ncell = static_cast<std::size_t>(nrow) * ncol;
+  const int nlayer = x_mat.ncol();
+  if (static_cast<std::size_t>(x_mat.nrow()) != ncell)
+    Rcpp::stop("x_mat must have one row per raster cell.");
+  if (lac.ncol() < 3) Rcpp::stop("lac must have the columns i, r and Lac.");
+
+  // Valid lac rows (layer inside x_mat) and number of distinct window sizes
+  struct LacRow { int layer, radius; double weight; };
+  std::vector<LacRow> rows;
+  std::set<int> distinct_w;
   for (int l = 0; l < lac.nrow(); ++l) {
-    int layer = lac(l, 0) - 1; // Adjusting layer index to 0-based
-    if (layer < 0 || layer >= x_mat.ncol()) continue; // Skip invalid layers
-    
-    int w = lac(l, 1);
-    int r = (w - 1) / 2;
-    double weight = lac(l, 2);
-    distinctWs.insert(w); // Add window size to set of distinct window sizes
-    
-    double sum = 0.0;
-    int count = 0;
-    
-    // Expand the loop to include negative indices if na_rm = false, leading to NA if encountered
-    for (int i = row - r; i <= row + r; ++i) {
-      for (int j = col - r; j <= col + r; ++j) {
-        // Skip cells outside the raster boundaries if na_rm is true
-        if (na_rm && (i < 0 || i >= x_ras.nrow || j < 0 || j >= x_ras.ncol)) continue;
-        
-        // Assign NA and break if encountering out-of-bound indices with na_rm = false
-        if (!na_rm && (i < 0 || i >= x_ras.nrow || j < 0 || j >= x_ras.ncol)) {
-          weightedSums[layer] = NA_REAL;
-          break;
-        }
-        
-        double value = x_mat(j + i * x_ras.ncol, layer);
-        if (NumericMatrix::is_na(value)) {
-          if (na_rm) continue; // Skip NA values if na_rm is true
-          else {
-            weightedSums[layer] = NA_REAL; // Assign NA and break if encountering NA with na_rm = false
-            break;
+    const int layer = static_cast<int>(lac(l, 0) - 1);  // R (1-based) -> C++ (0-based)
+    if (layer < 0 || layer >= nlayer) continue;
+    const int w = static_cast<int>(lac(l, 1));
+    distinct_w.insert(w);
+    rows.push_back({layer, (w - 1) / 2, lac(l, 2)});
+  }
+  const double n_w = static_cast<double>(distinct_w.size());
+
+  NumericMatrix result(static_cast<int>(ncell), nlayer);  // zero-initialised
+  const int nthreads = cgei::resolve_threads(ncores);
+  cgei::ParallelProgress progress(rows.size(), display_progress);
+
+  std::vector<double> H(ncell);
+  std::vector<int> Hc;
+  std::vector<char> layer_has_na(nlayer, -1);
+
+  for (const LacRow &lr : rows) {
+    const double *v = &x_mat(0, lr.layer);
+    if (layer_has_na[lr.layer] < 0) layer_has_na[lr.layer] = cgei::any_nan(v, ncell) ? 1 : 0;
+    const bool has_na = layer_has_na[lr.layer] == 1;
+    if (has_na) Hc.resize(ncell);
+    const int rad = lr.radius;
+    const int full = (2 * rad + 1) * (2 * rad + 1);
+    const double weight = lr.weight;
+    double *out = &result(0, lr.layer);
+    const double na_real = NA_REAL;
+
+    cgei::box_rows(v, nrow, ncol, rad, rad, ncol, H.data(), has_na ? Hc.data() : nullptr,
+                   nthreads);
+    cgei::box_cols(H.data(), has_na ? Hc.data() : nullptr, nrow, ncol, rad, rad, nrow, nthreads,
+                   [&](const int row, const int c0, const int c1, const double *sum,
+                       const int *cnt) {
+      const int r_lo = std::max(0, row - rad), r_hi = std::min(nrow - 1, row + rad);
+      const bool rows_inside = row - rad >= 0 && row + rad < nrow;
+      double *o = out + static_cast<std::size_t>(row) * ncol;
+      for (int col = c0; col < c1; ++col) {
+        const int c_lo = std::max(0, col - rad), c_hi = std::min(ncol - 1, col + rad);
+        const int count = cnt ? cnt[col - c0] : (r_hi - r_lo + 1) * (c_hi - c_lo + 1);
+        if (na_rm) {
+          if (count > 0) o[col] += (sum[col - c0] / count) * weight;
+        } else {
+          if (std::isnan(o[col])) continue;  // stays NA
+          const bool inside = rows_inside && col - rad >= 0 && col + rad < ncol;
+          if (!inside || count != full) {
+            o[col] = na_real;
+          } else {
+            o[col] += (sum[col - c0] / count) * weight;
           }
         }
-        
-        sum += value;
-        count++;
       }
-      if (NumericMatrix::is_na(weightedSums[layer])) break; // If NA was assigned, no need to continue
-    }
-    
-    if (!NumericMatrix::is_na(weightedSums[layer]) && count > 0) {
-      weightedSums[layer] += (sum / count) * weight; // Add weighted focal mean to the sum for this layer
-    }
+    });
+    progress.tick();
   }
-  
-  // Normalize weighted sums by the number of distinct window sizes
-  for (size_t i = 0; i < weightedSums.size(); ++i) {
-    if (!NumericMatrix::is_na(weightedSums[i])) {
-      weightedSums[i] /= distinctWs.size();
-    }
-  }
-  
-  return weightedSums;
-}
+  progress.finish();
 
-// [[Rcpp::export]]
-NumericMatrix focal_sum(S4 &x, const NumericMatrix &x_mat, const NumericMatrix &lac,
-                        const bool na_rm = true, const int ncores = 1, const bool display_progress = false) {
-  RasterInfo x_ras(x);
-  NumericMatrix result(x_ras.nrow * x_ras.ncol, x_mat.ncol());
-  
-  // Progress bar
-  ETAProgressBar pb_ETA;
-  Progress pb(x_ras.ncell, display_progress, pb_ETA);
-  
-#ifdef _OPENMP
-  omp_set_num_threads(ncores);
-#pragma omp parallel for collapse(2)
-#endif
-  for (int row = 0; row < x_ras.nrow; ++row) {
-    for (int col = 0; col < x_ras.ncol; ++col) {
-      if ( !pb.is_aborted() ) {
-        Progress::check_abort(); 
-        pb.increment();
-        
-        std::vector<double> layer_means = compute_focal_weighted_mean(x_ras, x_mat, lac, row, col, na_rm);
-        for (size_t layer = 0; layer < layer_means.size(); ++layer) {
-          result(col + row * x_ras.ncol, layer) = layer_means[layer];
-        }
-      }
+  // Normalise by the number of distinct window sizes
+  for (int layer = 0; layer < nlayer; ++layer) {
+    double *out = &result(0, layer);
+    for (std::size_t i = 0; i < ncell; ++i) {
+      if (!std::isnan(out[i])) out[i] /= n_w;
     }
   }
-  
   return result;
 }

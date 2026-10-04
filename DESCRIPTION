@@ -1,8 +1,8 @@
 Package: CGEI
 Type: Package
 Title: R package for computing the Composite Greenspace Exposure Index (CGEI)
-Version: 0.3.1
-Date: 2024-02-18
+Version: 0.4.0
+Date: 2026-10-04
 Authors@R: 
     c(person(given = "Sebastian",
            family = "Brinkmann",
@@ -18,20 +18,21 @@ URL: https://github.com/STBrinkmann/CGEI
 BugReports: https://github.com/STBrinkmann/CGEI/issues
 Imports: 
     checkmate,
-    classInt,
     dplyr,
     ggplot2,
     magrittr,
     methods,
-    raster,
     Rcpp (>= 1.0.11),
     sf,
-    terra
+    stats,
+    terra,
+    utils
 LinkingTo: 
     Rcpp,
     RcppProgress
 Suggests: 
+    classInt,
     ggpubr,
-    testthat (>= 3.0.0)
+    testthat (>= 3.1.5)
 RoxygenNote: 7.3.2
 Config/testthat/edition: 3

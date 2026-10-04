@@ -1,0 +1,3 @@
+engine_tests_release
+engine_tests_asan
+engine_tests_tsan

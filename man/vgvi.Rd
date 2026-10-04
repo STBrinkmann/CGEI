@@ -61,6 +61,12 @@ The CRS (\code{\link[sf]{st_crs}}) needs to have a metric unit!
 The type of function, used for calculating the distance decay weights, can be defined with the \code{mode} parameter.
 The argument 'logit' uses the logistic function, d = 1 / (1 + e^(b * (x - m))) and 'exponential' the exponential function d = 1 / (1 + (b * x^m)).
 The decay function can be visualized using the \code{\link[CGEI]{visualizeWeights}} function.
+
+The visible cells are grouped into distance rings of 1 map unit (distance to the observer, rounded; the observer cell belongs to ring 1).
+For every ring that contains at least one visible cell, the share of greenspace among its visible cells is computed.
+The VGVI is the mean of these shares (\code{mode = "none"}) or their weighted mean, the weight of a ring being the integral of the decay function over the ring's distance interval (normalised by \code{max_distance}).
+Rings without visible cells are ignored, so VGVI = 1 if all visible cells are green, independent of the raster resolution.
+If the eye level of an observer is below the DSM at its own cell (e.g. under a tree crown), only this cell is visible.
 }
 \examples{
 \dontrun{

@@ -13,15 +13,39 @@ focal_sum <- function(x, x_mat, lac, na_rm = TRUE, ncores = 1L, display_progress
     .Call(`_CGEI_focal_sum`, x, x_mat, lac, na_rm, ncores, display_progress)
 }
 
+jenks_breaks_cpp <- function(x, k, style = "fisher") {
+    .Call(`_CGEI_jenks_breaks_cpp`, x, k, style)
+}
+
 rcpp_lacunarity <- function(x, x_values, r_vec, fun, ncores = 1L, display_progress = FALSE) {
     .Call(`_CGEI_rcpp_lacunarity`, x, x_values, r_vec, fun, ncores, display_progress)
 }
 
-VGVI_cpp <- function(dsm, dsm_values, greenspace, greenspace_values, x0, y0, h0, radius, fun, m, b, ncores = 1L, display_progress = FALSE) {
-    .Call(`_CGEI_VGVI_cpp`, dsm, dsm_values, greenspace, greenspace_values, x0, y0, h0, radius, fun, m, b, ncores, display_progress)
+n_distinct_upto <- function(x, limit) {
+    .Call(`_CGEI_n_distinct_upto`, x, limit)
 }
 
-VVI_cpp <- function(dsm, dsm_values, x0, y0, h0, radius, ncores = 1L, display_progress = FALSE) {
-    .Call(`_CGEI_VVI_cpp`, dsm, dsm_values, x0, y0, h0, radius, ncores, display_progress)
+VGVI_cpp <- function(dsm, dsm_values, greenspace, greenspace_values, x0, y0, h0, radius, fun, m, b, ncores = 1L, display_progress = FALSE, early_stop = TRUE) {
+    .Call(`_CGEI_VGVI_cpp`, dsm, dsm_values, greenspace, greenspace_values, x0, y0, h0, radius, fun, m, b, ncores, display_progress, early_stop)
+}
+
+VGVI_rings_cpp <- function(dsm, dsm_values, greenspace, greenspace_values, x0, y0, h0, radius, ncores = 1L, early_stop = TRUE) {
+    .Call(`_CGEI_VGVI_rings_cpp`, dsm, dsm_values, greenspace, greenspace_values, x0, y0, h0, radius, ncores, early_stop)
+}
+
+cgei_openmp_info <- function() {
+    .Call(`_CGEI_cgei_openmp_info`)
+}
+
+VVI_cpp <- function(dsm, dsm_values, x0, y0, h0, radius, ncores = 1L, display_progress = FALSE, early_stop = TRUE) {
+    .Call(`_CGEI_VVI_cpp`, dsm, dsm_values, x0, y0, h0, radius, ncores, display_progress, early_stop)
+}
+
+VVI_count_cpp <- function(dsm, dsm_values, x0, y0, h0, radius, ncores = 1L, display_progress = FALSE, early_stop = TRUE) {
+    .Call(`_CGEI_VVI_count_cpp`, dsm, dsm_values, x0, y0, h0, radius, ncores, display_progress, early_stop)
+}
+
+VVI_cells_cpp <- function(dsm, dsm_values, x0, y0, h0, radius, ncores = 1L, display_progress = FALSE, early_stop = TRUE) {
+    .Call(`_CGEI_VVI_cells_cpp`, dsm, dsm_values, x0, y0, h0, radius, ncores, display_progress, early_stop)
 }
 

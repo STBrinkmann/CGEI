@@ -40,7 +40,7 @@ inline double calc_idw(std::vector<double> &d, std::vector<double> &v, const dou
 #include "eta_progress_bar.h"
 
 // [[Rcpp::export]]
-NumericVector IDW_cpp(S4 &rast, const NumericVector &x,
+NumericVector IDW_cpp(const NumericVector &rast, const NumericVector &x,
                       const NumericVector &sf_x, const NumericVector &sf_y, const NumericVector &sf_z,
                       const size_t n, const double b, const double radius,
                       const bool na_only=false, const int ncores=1, const bool display_progress=false)
