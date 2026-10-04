@@ -145,6 +145,60 @@ test_that("reclassify_jenks() works with few distinct values", {
   expect_equal(terra::values(rc, mat = FALSE), match(terra::values(r, mat = FALSE), c(0, 0.5, 1)))
 })
 
+# The terra-based reclassification used by gavi() up to 0.3.1 (crop with
+# mask, spatSample, classify, sum of the layers), with the 0.4.0 natural breaks.
+gavi_terra_pipeline <- function(x, lac, na_rm = TRUE) {
+  fm <- CGEI:::focal_sum(CGEI:::raster_geometry(x), terra::values(x, mat = TRUE) * 1.0,
+                         as.matrix(lac[, c("i", "r", "Lac")]), na_rm, 1L)
+  r <- terra::rast(x)
+  r[] <- fm
+  r <- terra::crop(r, x, mask = TRUE)
+  rc <- function(layer) {
+    n_valid <- terra::global(layer, "notNA")[1, 1]
+    v <- unlist(terra::spatSample(layer, min(50000, n_valid), na.rm = TRUE), use.names = FALSE)
+    style <- ifelse(terra::ncell(layer) > 5000, "fisher", "jenks")
+    b <- CGEI:::jenks_breaks(v, 9, style)
+    b[1] <- -Inf
+    b[length(b)] <- Inf
+    terra::classify(layer, cbind(utils::head(b, -1), utils::tail(b, -1), seq_len(length(b) - 1)),
+                    include.lowest = TRUE)
+  }
+  for (i in seq_len(terra::nlyr(r))) r[[i]] <- rc(r[[i]])
+  g <- sum(r) / terra::nlyr(r)
+  if (terra::nlyr(r) > 1) g <- rc(g)
+  g
+}
+
+test_that("gavi() equals the terra-based reclassification (masking, classes, layer mean)", {
+  na_to_na <- function(v) replace(v, is.na(v), NA_real_)  # terra may return NaN for NA
+  set.seed(11)
+  # 2400 cells: "jenks" style; 6750 cells: "fisher" style (all cells used for the breaks)
+  for (dims in list(c(40, 60), c(75, 90))) {
+    m1 <- matrix(stats::rbinom(prod(dims), 1, 0.35), dims[1], dims[2])
+    m2 <- matrix(stats::runif(prod(dims)), dims[1], dims[2])
+    m1[sample(length(m1), 40)] <- NA
+    m2[sample(length(m2), 60)] <- NA
+    x <- c(terra::rast(m1, crs = "EPSG:25832"), terra::rast(m2, crs = "EPSG:25832"))
+    lac <- lacunarity(x, r_vec = c(3, 5, 9))
+    lac2 <- lac[lac$i == 2, ]
+    lac2$i <- 1
+    cases <- list(two_layers = list(x, lac), layer_2 = list(x[[2]], lac2))
+    for (case in names(cases)) {
+      for (na_rm in c(TRUE, FALSE)) {
+        xi <- cases[[case]][[1]]
+        li <- cases[[case]][[2]]
+        g_new <- gavi(xi, li, na.rm = na_rm)
+        g_old <- gavi_terra_pipeline(xi, li, na_rm)
+        info <- sprintf("%d x %d, %s, na.rm = %s", dims[1], dims[2], case, na_rm)
+        expect_identical(na_to_na(terra::values(g_new, mat = FALSE)),
+                         na_to_na(terra::values(g_old, mat = FALSE)), info = info)
+        expect_identical(names(g_new), names(g_old), info = info)
+        expect_true(terra::compareGeom(g_new, xi), info = info)
+      }
+    }
+  }
+})
+
 test_that("gavi() returns classes 1..9 and masks NA cells", {
   set.seed(5)
   m1 <- matrix(stats::rbinom(40 * 60, 1, 0.3), 40, 60)

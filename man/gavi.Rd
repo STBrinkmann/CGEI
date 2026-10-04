@@ -23,6 +23,15 @@ A `SpatRaster` object representing the GAVI.
 \description{
 This function computes the Greenspace Availability Index (GAVI) from a lacunarity dataset.
 }
+\details{
+For every layer, the focal means of all box sizes in \code{lac} are weighted by their lacunarity
+and averaged. These values are classified into 9 classes using Jenks natural breaks ("fisher"
+style for rasters with more than 5,000 cells, "jenks" otherwise). The GAVI is the mean of the
+classes of all layers, again classified into 9 classes if \code{x} has more than one layer.
+Cells that are NA in a layer are NA in that layer's classes (and in the GAVI).
+The natural breaks are computed from all non-NA cells or, if there are more than 50,000 of them,
+from a random sample of 50,000 cells; use \code{set.seed()} for reproducible results.
+}
 \examples{
 library(CGEI)
 library(terra)
