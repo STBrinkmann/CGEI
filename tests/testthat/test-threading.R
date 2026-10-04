@@ -14,6 +14,23 @@ test_that("OpenMP information is available", {
   expect_gte(info$max_threads, 1)
 })
 
+test_that("cores is validated; a build without OpenMP is reported once", {
+  for (bad in list(0, -1, 1.5, NA, "2", c(1, 2))) {
+    expect_error(CGEI:::check_cores(bad), info = paste(bad, collapse = ","))
+  }
+  expect_identical(CGEI:::check_cores(1), 1L)
+  old <- options(CGEI.openmp_warned = NULL)
+  on.exit(options(old), add = TRUE)
+  if (has_openmp()) {
+    expect_no_warning(expect_identical(CGEI:::check_cores(4), 4L))
+  } else {
+    expect_warning(CGEI:::check_cores(4), "without OpenMP")
+    expect_no_warning(CGEI:::check_cores(4))  # only once per session
+    options(CGEI.openmp_warned = TRUE)        # keep later tests quiet
+    old$CGEI.openmp_warned <- TRUE
+  }
+})
+
 test_that("VGVI / VVI results are identical for 1, 2 and 4 threads", {
   d <- scene_inputs()
   for (fun in 1:3) {
