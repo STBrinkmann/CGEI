@@ -68,7 +68,7 @@ sf_interpolat_IDW <- function(observer, v, aoi = NULL, max_distance = Inf,
     message("Preprocessing:")
     pb = txtProgressBar(min = 0, max = 3, initial = 0, style = 3)
   }
-  observer <- sf_to_POINT(observer, spacing, dsm_rast)
+  observer <- sf_to_POINT(observer, spacing, NULL)  # (sf_to_POINT does not use the raster)
   
   if (progress) setTxtProgressBar(pb, 1)
   

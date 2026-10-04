@@ -5,6 +5,7 @@ dir <- if (length(args) >= 1) args[1] else file.path("benchmarks", "results")
 rd <- function(f) if (file.exists(file.path(dir, f))) readRDS(file.path(dir, f)) else NULL
 fmt <- function(x, d = 3) ifelse(is.na(x), "-", formatC(x, format = "f", digits = d))
 speedup <- function(old, new) ifelse(is.na(old) | is.na(new), "-", sprintf("**%.0fx**", old / new))
+get_col <- function(m, col) if (col %in% names(m)) m[[col]] else rep(NA_real_, nrow(m))
 md_table <- function(df) {
   cat("| ", paste(names(df), collapse = " | "), " |\n", sep = "")
   cat("|", paste(rep("---", ncol(df)), collapse = "|"), "|\n", sep = "")
@@ -78,5 +79,14 @@ if (!is.null(wn) && !is.null(wo)) {
                       `vvi() 0.3.1` = fmt(m$vvi_s_old, 2), `vvi() 0.4.0` = fmt(m$vvi_s_new, 2),
                       `speed-up` = speedup(m$vvi_s_old, m$vvi_s_new),
                       `cumulative 0.3.1` = fmt(m$cumulative_s_old, 2), `cumulative 0.4.0` = fmt(m$cumulative_s_new, 2),
-                      ` speed-up` = speedup(m$cumulative_s_old, m$cumulative_s_new), check.names = FALSE))
+                      ` speed-up` = speedup(m$cumulative_s_old, m$cumulative_s_new),
+                      `viewshed 0.3.1` = fmt(get_col(m, "viewshed_s_old"), 2),
+                      `viewshed 0.4.0` = fmt(get_col(m, "viewshed_s_new"), 2),
+                      `speed-up  ` = speedup(get_col(m, "viewshed_s_old"), get_col(m, "viewshed_s_new")),
+                      check.names = FALSE))
+  cat("### VVI: mean values (results change slightly because of the bug fixes)\n\n")
+  md_table(unique(data.frame(`max_distance` = m$radius,
+                             `mean VVI 0.3.1` = fmt(m$mean_vvi_old, 4), `mean VVI 0.4.0` = fmt(m$mean_vvi_new, 4),
+                             `cumulative VVI 0.3.1` = fmt(get_col(m, "cvvi_old"), 4),
+                             `cumulative VVI 0.4.0` = fmt(get_col(m, "cvvi_new"), 4), check.names = FALSE)))
 }

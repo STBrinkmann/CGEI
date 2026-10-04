@@ -23,13 +23,18 @@ for (radius in c(100, 200)) {
   for (cores in c(1L, 4L)) {
     v <- NULL
     t_vvi <- med_time(function() v <<- suppressMessages(vvi(obs, dsm, dtm, max_distance = radius, cores = cores)))
-    t_cum <- med_time(function() suppressMessages(vvi(obs, dsm, dtm, max_distance = radius, mode = "cumulative",
-                                                      cores = cores)))
+    cvvi <- NULL
+    t_cum <- med_time(function() cvvi <<- suppressMessages(vvi(obs, dsm, dtm, max_distance = radius,
+                                                               mode = "cumulative", cores = cores)))
+    vs <- NULL
+    t_vs <- med_time(function() vs <<- suppressMessages(vvi(obs, dsm, dtm, max_distance = radius,
+                                                            mode = "viewshed", cores = cores)))
     results[[length(results) + 1]] <- data.frame(version = version, radius = radius, cores = cores,
                                                  n_obs = n_obs, vvi_s = t_vvi, cumulative_s = t_cum,
-                                                 mean_vvi = mean(v$VVI))
-    cat(sprintf("%s r=%d cores=%d: vvi() %.3f s, vvi(mode = \"cumulative\") %.3f s\n",
-                version, radius, cores, t_vvi, t_cum))
+                                                 viewshed_s = t_vs, mean_vvi = mean(v$VVI), cvvi = cvvi,
+                                                 sum_n_views = sum(terra::values(vs$n_views), na.rm = TRUE))
+    cat(sprintf("%s r=%d cores=%d: vvi() %.3f s, mode = \"cumulative\" %.3f s, mode = \"viewshed\" %.3f s\n",
+                version, radius, cores, t_vvi, t_cum, t_vs))
   }
 }
 saveRDS(list(timing = do.call(rbind, results)), out_file)

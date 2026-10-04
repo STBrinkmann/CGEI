@@ -13,13 +13,21 @@ R CMD INSTALL --library=lib_old /tmp/cgei_old
 R CMD INSTALL --library=lib_new .
 
 # 3. run every version in its own R process
-R_LIBS=lib_new Rscript benchmarks/bench_vgvi.R benchmarks/data benchmarks/results/vgvi_new.rds
-R_LIBS=lib_old Rscript benchmarks/bench_vgvi.R benchmarks/data benchmarks/results/vgvi_old.rds
+#    (one after the other, nothing else running on the machine)
+R_LIBS=lib_new Rscript benchmarks/bench_vgvi.R benchmarks/data benchmarks/results/vgvi_new.rds 1000 5
+R_LIBS=lib_old Rscript benchmarks/bench_vgvi.R benchmarks/data benchmarks/results/vgvi_old.rds 1000 5
+R_LIBS=lib_new Rscript benchmarks/bench_vvi.R benchmarks/data benchmarks/results/vvi_new.rds 500 3
+R_LIBS=lib_old Rscript benchmarks/bench_vvi.R benchmarks/data benchmarks/results/vvi_old.rds 500 3
 R_LIBS=lib_new Rscript benchmarks/bench_gavi.R benchmarks/data benchmarks/results/gavi_new.rds
+# 0.3.1 needs minutes per call: one repetition, 1000 x 1000 with 4 threads only
 R_LIBS=lib_old Rscript benchmarks/bench_gavi.R benchmarks/data benchmarks/results/gavi_old_500.rds 500 1,4 1
+R_LIBS=lib_old Rscript benchmarks/bench_gavi.R benchmarks/data benchmarks/results/gavi_old_1000.rds 1000 4 1
 
 # 4. tables
 Rscript benchmarks/summarise.R benchmarks/results
+
+# 5. exactness at scale: C++ results vs the naive R reference of the tests
+R_LIBS=lib_new Rscript benchmarks/validate.R benchmarks/data 15 100
 ```
 
 ## Data (`make_data.R`, seeded)

@@ -20,3 +20,6 @@ check_cores <- function(cores) {
   }
   cores
 }
+
+# Column names used with dplyr's non-standard evaluation (for R CMD check)
+utils::globalVariables(c(".", "VGVI", "VVI", "CVVI", "d", "weight", "ln(r)", "ln(Lac)"))
