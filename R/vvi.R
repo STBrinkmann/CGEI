@@ -192,7 +192,6 @@ vvi <- function(observer, dsm_rast, dtm_rast,
   } else if (length(invalid_points) > 1) {
     message(paste(length(invalid_points), "points have been removed, because they were outside of the DSM or DTM"))
   }
-  invisible(gc())
   
   
   #### 7. Calculate viewsheds and VVI ####

@@ -27,6 +27,12 @@
 #' The argument 'logit' uses the logistic function, d = 1 / (1 + e^(b * (x - m))) and 'exponential' the exponential function d = 1 / (1 + (b * x^m)).
 #' The decay function can be visualized using the \code{\link[CGEI]{visualizeWeights}} function.
 #'
+#' The visible cells are grouped into distance rings of 1 map unit (distance to the observer, rounded; the observer cell belongs to ring 1).
+#' For every ring that contains at least one visible cell, the share of greenspace among its visible cells is computed.
+#' The VGVI is the mean of these shares (\code{mode = "none"}) or their weighted mean, the weight of a ring being the integral of the decay function over the ring's distance interval (normalised by \code{max_distance}).
+#' Rings without visible cells are ignored, so VGVI = 1 if all visible cells are green, independent of the raster resolution.
+#' If the eye level of an observer is below the DSM at its own cell (e.g. under a tree crown), only this cell is visible.
+#'
 #' @return sf_object containing the weighted VGVI values as POINT features, where 0 = no green cells are visible, and 1 = all of the visible cells are green.
 #'
 #' @examples
@@ -205,7 +211,6 @@ vgvi <- function(observer, dsm_rast, dtm_rast, greenspace_rast,
   } else if (length(invalid_points) > 1) {
     message(paste(length(invalid_points), "points have been removed, because they were outside of the DSM or DTM"))
   }
-  invisible(gc())
   
   
   #### 7. Calculate viewsheds and VGVI ####

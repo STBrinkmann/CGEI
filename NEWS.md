@@ -1,3 +1,85 @@
+# CGEI 0.4.0
+
+This release fixes several bugs that affected the results of `vgvi()`,
+`vvi()`, `viewshed_list()`, `lacunarity()` and `gavi()`, and makes them much
+faster (see `benchmarks/RESULTS.md`). **VGVI values change** (substantially for
+rasters with a resolution above 1 m and for observers near the right border
+of the cropped DSM), VVI values change slightly.
+
+## Bug fixes
+
+### `vgvi()`
+
+-   Greenspace values and distances were taken from the wrong cell: the viewshed
+    stored 1-based cell numbers that were then used as 0-based indices. Every
+    visible cell was evaluated one column to the east, the observer cell got a
+    distance of one cell, and visible cells in the last raster column wrapped to
+    the first column of the next row (distance = raster width), which pushed
+    VGVI towards 0. The test value of the package changed from 0.004 / 0.001 to
+    0.271 / 0.5 (random greenspace with 50 % green cells).
+-   Distance rings (1 map unit) without any visible cell counted as 0 % green
+    but kept their decay weight. They are now ignored, i.e. VGVI = 1 if all
+    visible cells are green, independent of the raster resolution (a 100 %
+    green view gave 0.91 at 5 m resolution before).
+-   Fractional greenspace values were truncated to integers, and a viewshed
+    consisting of a single distance ring used integer division.
+
+### Line of sight (`vgvi()`, `vvi()`, `viewshed_list()`)
+
+-   An obstacle in the first cell of a line of sight was ignored whenever that
+    line shared exactly this first cell with the previous line (`k_i > 1`
+    instead of `k_i > 0`). An observer enclosed by a 10 m wall saw 249 instead
+    of 9 cells.
+-   Cells with NA heights skipped the horizon book-keeping, so later lines could
+    reuse a stale horizon of an unrelated line.
+-   Rasters with at most 2 * `max_distance` / resolution columns (e.g. a single
+    observer) could let cells from the opposite raster border enter the
+    viewshed (column wrap-around).
+-   The DSM is cropped with `snap = "out"` and an extra margin, so observers at
+    the border of the area of interest keep their full circle.
+-   `vvi(by_row = TRUE)` failed if observer points were removed (outside of the
+    DSM / DTM).
+
+### `lacunarity()` and `gavi()`
+
+-   `lacunarity()`: a box whose newly added rim contained only NA became NA and
+    lost the mass of its valid core; results depended on the order of `r_vec`;
+    box sizes larger than the raster read outside of the raster (they are now
+    dropped with a warning).
+-   `gavi()`: layers with fewer than 9 distinct values produced a broken
+    reclassification matrix; sampling no longer warns for rasters with NA.
+
+## Performance
+
+-   New C++ viewshed engine: precomputed line-of-sight geometry and decay
+    weights, no memory allocation per observer, exact early termination of
+    lines of sight that cannot reveal anything anymore. `vgvi()` is about
+    7-25x faster (C++ core) and its R overhead was reduced (no forced garbage
+    collection).
+-   `gavi()` focal means and `lacunarity()` box masses use separable sliding
+    windows: O(1) per cell instead of O(window size^2), i.e. hundreds to
+    thousands of times faster for the default box sizes. Results are
+    bit-identical for integer and single-precision (GeoTIFF float) rasters.
+-   The Jenks / Fisher natural breaks of `gavi()` are computed in C++ (identical
+    breaks to `classInt`, Fisher's optimum in O(k n log n) instead of
+    O(k n^2)): about 200x faster.
+-   `vvi(mode = "VVI")` only counts cells instead of building cell lists.
+
+## Multi-threading
+
+-   No R API calls or Rcpp objects inside OpenMP regions anymore (an
+    out-of-range access in a worker thread could crash R), thread-safe progress
+    bar, `num_threads()` instead of changing the global OpenMP setting, and
+    `cores` is validated (a warning is given if CGEI was built without OpenMP).
+    Results are identical for any number of threads.
+
+## Other changes
+
+-   The `raster` and `classInt` packages are no longer required.
+-   New test suite with shipped test data, an independent R reference
+    implementation and tests for R/C++ index offsets and multi-threading;
+    stand-alone sanitizer tests in `dev/cpp-tests`, benchmarks in `benchmarks/`.
+
 # CGEI 0.3.1
 
 -   Fixed the "subscript out of bounds" bug in the `vgvi.cpp` and `vvi.cpp` functions.

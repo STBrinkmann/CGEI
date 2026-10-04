@@ -49,7 +49,7 @@ class ParallelProgress {
   // To be called by the master thread outside of parallel regions.
   void finish() {
     if (!aborted() && Progress::check_abort()) aborted_.store(true);
-    if (display_ && !aborted()) pb_.update(total_);
+    if (display_ && !aborted() && total_ > 0) pb_.update(total_);
     if (aborted()) throw Rcpp::internal::InterruptedException();
   }
 
