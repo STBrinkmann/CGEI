@@ -57,12 +57,12 @@ open-terrain scenes of 2 x 2 km, 500 x 500 to 1000 x 1000 GAVI rasters; 1 and
 
 | function | speed-up |
 |---|---|
-| `vgvi()`, C++ core | @VGVI_CORE@ |
-| `vgvi()`, complete call (1000 observers) | @VGVI_E2E@ |
-| `vvi()` | @VVI@ |
-| `vvi(mode = "cumulative")` / `vvi(mode = "viewshed")` | @VVI_CUM@ |
-| `lacunarity()` | @LAC@ |
-| `gavi()` | @GAVI@ |
+| `vgvi()`, C++ core | 6-10x |
+| `vgvi()`, complete call (1000 observers) | 6-9x |
+| `vvi()` | 22-102x |
+| `vvi(mode = "cumulative")` / `vvi(mode = "viewshed")` | 27-89x / 14-43x |
+| `lacunarity()` | 156-516x |
+| `gavi()` | 345-1557x |
 
 -   New C++ viewshed engine: precomputed line-of-sight geometry and decay
     weights, no memory allocation per observer, exact early termination of
