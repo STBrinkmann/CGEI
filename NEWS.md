@@ -47,23 +47,40 @@ of the cropped DSM), VVI values change slightly.
     box sizes larger than the raster read outside of the raster (they are now
     dropped with a warning).
 -   `gavi()`: layers with fewer than 9 distinct values produced a broken
-    reclassification matrix; sampling no longer warns for rasters with NA.
+    reclassification matrix; sampling warned for rasters with NA cells.
 
 ## Performance
 
+Speed-up compared with CGEI 0.3.1 on generated test data (1 m city and
+open-terrain scenes of 2 x 2 km, 500 x 500 to 1000 x 1000 GAVI rasters; 1 and
+4 threads; details and reproduction in `benchmarks/RESULTS.md`):
+
+| function | speed-up |
+|---|---|
+| `vgvi()`, C++ core | @VGVI_CORE@ |
+| `vgvi()`, complete call (1000 observers) | @VGVI_E2E@ |
+| `vvi()` | @VVI@ |
+| `vvi(mode = "cumulative")` / `vvi(mode = "viewshed")` | @VVI_CUM@ |
+| `lacunarity()` | @LAC@ |
+| `gavi()` | @GAVI@ |
+
 -   New C++ viewshed engine: precomputed line-of-sight geometry and decay
     weights, no memory allocation per observer, exact early termination of
-    lines of sight that cannot reveal anything anymore. `vgvi()` is about
-    7-25x faster (C++ core) and its R overhead was reduced (no forced garbage
-    collection).
+    lines of sight that cannot reveal anything anymore (block maxima of the
+    DSM), observers processed in a cache-friendly (Morton) order. No forced
+    garbage collection in `vgvi()`, `vvi()` and `viewshed_list()`.
+-   `vvi()`: the default mode only counts cells; the cumulative and viewshed
+    modes accumulate per-cell counts in C++ instead of returning the cells of
+    every observer to R (memory: two integer rasters instead of one vector per
+    observer).
 -   `gavi()` focal means and `lacunarity()` box masses use separable sliding
-    windows: O(1) per cell instead of O(window size^2), i.e. hundreds to
-    thousands of times faster for the default box sizes. Results are
-    bit-identical for integer and single-precision (GeoTIFF float) rasters.
+    windows: O(1) per cell instead of O(window size^2). Results are
+    bit-identical to 0.3.1 for integer and single-precision (GeoTIFF float)
+    rasters.
 -   The Jenks / Fisher natural breaks of `gavi()` are computed in C++ (identical
     breaks to `classInt`, Fisher's optimum in O(k n log n) instead of
-    O(k n^2)): about 200x faster.
--   `vvi(mode = "VVI")` only counts cells instead of building cell lists.
+    O(k n^2)), and the reclassification runs on the values in memory instead
+    of `terra` round trips.
 
 ## Multi-threading
 
@@ -76,6 +93,10 @@ of the cropped DSM), VVI values change slightly.
 ## Other changes
 
 -   The `raster` and `classInt` packages are no longer required.
+-   `gavi()` draws the cells for the natural breaks (at most 50,000) with
+    `sample.int()` instead of `terra::spatSample()`. Rasters with at most
+    50,000 valid cells use all cells, as before; for larger rasters,
+    `set.seed()` makes the result reproducible.
 -   New test suite with shipped test data, an independent R reference
     implementation and tests for R/C++ index offsets and multi-threading;
     stand-alone sanitizer tests in `dev/cpp-tests`, benchmarks in `benchmarks/`.
