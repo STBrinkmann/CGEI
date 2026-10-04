@@ -54,7 +54,6 @@
 #' @importFrom sf st_crs st_as_sf st_transform st_geometry_type st_union st_set_geometry st_bbox st_buffer st_coordinates st_as_sfc
 #' @importFrom dplyr rename mutate relocate everything
 #' @importFrom terra crs rast res crop mask vect xyFromCell extract cellFromXY colFromX rowFromY writeRaster
-#' @importFrom raster raster
 #' @importFrom checkmate assert
 #' @importFrom utils txtProgressBar setTxtProgressBar
 viewshed_list <- function(observer, dsm_rast, dtm_rast,
@@ -81,6 +80,10 @@ viewshed_list <- function(observer, dsm_rast, dtm_rast,
   checkmate::assert(methods::is(max_distance, "numeric"), "max_distance must be a numeric")
   checkmate::assert(max_distance > 0, "max_distance must be greater than 0")
   max_distance <- round(max_distance, digits = 0)
+  checkmate::assert(max_distance >= 1, "max_distance must be at least 1 (it is rounded to whole map units)")
+  
+  # Check cores
+  cores <- check_cores(cores)
   
   # Check observer_height
   checkmate::assert(methods::is(observer_height, "numeric"), "observer_height must be a numeric")
@@ -107,12 +110,12 @@ viewshed_list <- function(observer, dsm_rast, dtm_rast,
   max_aoi <- observer %>% 
     sf::st_bbox() %>% 
     sf::st_as_sfc() %>% 
-    sf::st_buffer(max_distance)
+    sf::st_buffer(max_distance + 2 * terra::res(dsm_rast)[1])
   
-  # Crop DSM to max AOI
-  dsm_rast <- terra::crop(dsm_rast, terra::vect(max_aoi))
+  # Crop DSM to max AOI (two extra cells, so the full circle of every observer is kept)
+  dsm_rast <- terra::crop(dsm_rast, terra::vect(max_aoi), snap = "out")
   dsm_vec <- terra::values(dsm_rast, mat = FALSE)
-  dsm_cpp_rast <- dsm_rast %>% terra::rast() %>% raster::raster()
+  dsm_cpp_rast <- raster_geometry(dsm_rast)
   
   # Coordinates of start point
   x0 <- sf::st_coordinates(observer)[,1]

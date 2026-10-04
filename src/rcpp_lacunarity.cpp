@@ -1,252 +1,162 @@
 #include <Rcpp.h>
+
+#include <algorithm>
+#include <cmath>
+#include <vector>
+
+#include "boxfilter.h"
+#include "parallel_progress.h"
 #include "rsinfo.h"
-#include "rasterutils.h"
+
+// [[Rcpp::plugins(openmp)]]
+
 using namespace Rcpp;
 
-// Helper function to compute the number of iterations of the main
-// for-loop in the rcpp_lacunarity function.
-int max_iterations (const IntegerVector w_vec,
-                    const int mode,
-                    const int mat_width,
-                    const int mat_height) {
-  int N_r, r, w;
-  int iters = w_vec.size();
-  for (int i = 0; i < w_vec.size(); i++) {
-    w = w_vec[i];
-    
-    if (mode == 1) {
-      r = w;
-      N_r = (mat_width - r + 1) * (mat_height - r + 1);
-    } else {
-      r = (w-1)/2;
-      N_r = (mat_width-(2*r))*(mat_height-(2*r));
+namespace {
+
+// Lacunarity of a set of box masses (NA already removed).
+// fun == 1 (binary data, Plotnick et al. 1993): Z2 / Z1^2 from the frequency
+// distribution of the integer box sums.
+// fun != 1 (continuous data, Hoechstetter et al. 2011): 1 + var / mean^2.
+// Kept identical to the original implementation (same operations in the same
+// order), so results are bit-identical for the same box masses.
+double lacunarity(const NumericVector &box_masses, const int fun) {
+  if (box_masses.size() <= 1) return NA_REAL;
+  if (fun != 1) {
+    return 1 + ((sd(box_masses) * sd(box_masses)) / (mean(box_masses) * mean(box_masses)));
+  }
+  const double min_value = min(box_masses);
+  const double max_value_d = max(box_masses);
+  if (min_value < 0 || max_value_d > 67108864.0) {
+    // Not a 0/1 raster: the frequency table would be invalid (negative masses)
+    // or huge; use the equivalent moment formula E[S^2] / E[S]^2 instead.
+    long double z1 = 0, z2 = 0;
+    for (R_xlen_t j = 0; j < box_masses.size(); ++j) {
+      z1 += box_masses[j];
+      z2 += static_cast<long double>(box_masses[j]) * box_masses[j];
     }
-    iters += N_r;
+    z1 /= box_masses.size();
+    z2 /= box_masses.size();
+    return static_cast<double>(z2 / (z1 * z1));
   }
-  
-  return(iters);
+  // 1. Max box mass
+  const int max_value = max_value_d;
+  // 2. Frequency distribution n(S, r)
+  std::vector<int> n_S_r(max_value + 1, 0);
+  for (R_xlen_t j = 0; j < box_masses.size(); j++) {
+    n_S_r[static_cast<R_xlen_t>(box_masses[j])] += 1;
+  }
+  // 3. Probability distribution Q(S, r)
+  // 4. First and second moments of Q(S, r): S * Q(S, r) and S^2 * Q(S, r)
+  double Z_1 = 0.0, Z_2 = 0.0;
+  for (int S = 0; S <= max_value; S++) {
+    const double Q = n_S_r[S] / double(box_masses.size());
+    Z_1 += S * Q;
+    Z_2 += S * Q * S;
+  }
+  // 5. Lacunarity
+  return Z_2 / (Z_1 * Z_1);
 }
 
-int calculate_N_r_total(int x_ras_ncol, int x_ras_nrow, IntegerVector r_vec) {
-  int N_r_total = 0;
-  for(int i = 0; i < r_vec.size(); ++i) {
-    int r = r_vec[i];
-    int N_r = (x_ras_ncol - r + 1) * (x_ras_nrow - r + 1);
-    N_r_total += N_r;
-  }
-  return N_r_total;
-}
+}  // namespace
 
-// Calculate Lacunarity based on Plotnik ()
-double lacunarity (NumericVector box_masses,
-                   const int fun,
-                   const int N_r) {
-  double lac;
-  if (box_masses.size() > 1) {
-    if (fun == 1) {
-      // 1. Max number of box values
-      int max_value = max(box_masses);
-      
-      // 2. Frequency distribution n(S,r)
-      IntegerVector n_S_r(max_value+1, 0);
-      for (int j = 0; j < box_masses.size(); j++) {
-        n_S_r[box_masses[j]] += 1;
-      }
-      
-      // 3. Probability distribution Q(S,r)
-      NumericVector Q_S_r(max_value+1, 0.0);
-      for (int k = 0; k < Q_S_r.size(); k++) {
-        Q_S_r[k] = n_S_r[k] / double(box_masses.size());
-      }
-      
-      // 4. First and second moments of Q(S,r): S*Q(S,r) and S^2*Q(S,r)
-      NumericVector first_moment(max_value+1, 0.0);
-      NumericVector second_moment(max_value+1,0.0);
-      for (int S = 0; S < Q_S_r.size(); S++) {
-        first_moment[S] = S*Q_S_r[S];
-        second_moment[S]= S*Q_S_r[S]*S;
-      }
-      double Z_1 = sum(first_moment);
-      double Z_2 = sum(second_moment);
-      
-      // 5. Lacunarity
-      lac = Z_2/(Z_1*Z_1);
-    } else {
-      lac = 1 + (( sd(box_masses)  *  sd(box_masses) ) /
-        ( mean(box_masses)*mean(box_masses) ));
-      
-    }
-  } else {
-    lac = NA_REAL;
-  }
-  
-  return(lac);
-}
-
-
-#ifdef _OPENMP
-#include <omp.h>
-#endif
-// [[Rcpp::plugins(openmp)]]
-// [[Rcpp::depends(RcppProgress)]]
-#include <progress.hpp>
-#include "eta_progress_bar.h"
-
+// Gliding-box lacunarity of a raster for every box size w in r_vec.
+// Box mass: sum (fun == 1) or max - min (fun != 1) of the non-NA cells of the
+// w x w box; boxes without any non-NA cell are ignored. Box sizes larger than
+// the raster give NA.
+//
+// All box masses of one size are computed with separable sliding windows in
+// O(1) per cell (the original grew every box incrementally: O(w^2 - w_prev^2)
+// per box). This also fixes two bugs of the incremental scheme: an all-NA rim
+// turned a valid box into NA and reset its accumulated mass, and the result
+// depended on r_vec being sorted ascending.
 // [[Rcpp::export]]
-NumericVector rcpp_lacunarity(Rcpp::S4 &x, const Rcpp::NumericVector &x_values,
-                              const IntegerVector &r_vec,
-                              const int fun,
-                              const int ncores=1,
-                              const bool display_progress=false) {
-  
-  // Basic raster information
+NumericVector rcpp_lacunarity(const Rcpp::NumericVector &x, const Rcpp::NumericVector &x_values,
+                              const IntegerVector &r_vec, const int fun,
+                              const int ncores = 1, const bool display_progress = false) {
   const RasterInfo x_ras(x);
-  
-  // Vector to store box masses of previous r
-  NumericVector prev_box_mass_min(x_ras.ncell, NA_REAL);
-  NumericVector prev_box_mass_max(x_ras.ncell, NA_REAL);
-  NumericVector prev_box_mass_sum(x_ras.ncell, NA_REAL);
-  
-  // Output
+  const int nrow = x_ras.nrow, ncol = x_ras.ncol;
+  const std::size_t ncell = static_cast<std::size_t>(nrow) * ncol;
+  if (static_cast<std::size_t>(x_values.size()) != ncell)
+    Rcpp::stop("x_values does not match the dimensions of x.");
+
+  const double *v = x_values.begin();
+  const bool has_na = cgei::any_nan(v, ncell);
+  const int nthreads = cgei::resolve_threads(ncores);
+  const double na_real = NA_REAL;
+
   NumericVector output(r_vec.size());
-  
-  // Progress bar
-  ETAProgressBar pb_ETA;
-  Progress pb(r_vec.size(), display_progress, pb_ETA);
+  cgei::ParallelProgress progress(r_vec.size(), display_progress);
+  std::vector<double> H, extreme;
+  std::vector<int> Hc, count;
 
-  // Begin main loop
-  for (int j = 0; j < r_vec.size(); j++) {
-    const int r = r_vec[j];
-    // const int N_r = (mat_width - r + 1) * (mat_height - r + 1);
-    const int N_r = (x_ras.ncol - r + 1) * (x_ras.nrow - r + 1);
-    
-    // Gliding box algorithm
-    // Init shared vector for parallel loop
-    NumericVector box_masses(N_r);
-    
-#if defined(_OPENMP)
-    omp_set_num_threads(ncores);
-#pragma omp parallel for shared(box_masses, prev_box_mass_min, prev_box_mass_max, prev_box_mass_sum)
-#endif
-    for (int i = 0; i < N_r; i++) {
-      if (!pb.is_aborted()) {
-        Progress::check_abort();
-        
-        // Get x/y from i
-        const int row = trunc(i / (x_ras.ncol - r + 1));
-        const int col = i - (row * (x_ras.ncol - r + 1));
-        const int cell = row * x_ras.ncol + col;
-        
-        // Pull previous box mass value
-        const double prev_min = prev_box_mass_min[cell];
-        const double prev_max = prev_box_mass_max[cell];
-        const double prev_sum = prev_box_mass_sum[cell];
-        
-        double cell_min = NumericVector::is_na(prev_min) ? R_PosInf : prev_min;
-        double cell_max = NumericVector::is_na(prev_max) ? R_NegInf : prev_max;
-        double cell_sum = NumericVector::is_na(prev_sum) ? 0.0 : prev_sum;
+  for (R_xlen_t j = 0; j < r_vec.size(); j++) {
+    const int w = r_vec[j];
+    if (IntegerVector::is_na(w) || w < 1 || w > nrow || w > ncol) {
+      output[j] = NA_REAL;
+      progress.tick();
+      continue;
+    }
+    const int onr = nrow - w + 1, onc = ncol - w + 1;
+    const std::size_t N_r = static_cast<std::size_t>(onr) * onc;
+    NumericVector box_masses(static_cast<R_xlen_t>(N_r));
+    double *bm = box_masses.begin();
 
-        // Get box mass (window of r*r):
-        // If fun == 1, box-sum will be calculated, else box-range
-        int n = 0;
-        if(j > 0) {
-          for (int bx = r_vec[j-1]; bx < r; bx++) {
-            for (int by=0; by < r; by++) {
-              const int cell_id = (row+bx) * x_ras.ncol + (col+by);
-              const double cell_value = x_values[cell_id];
-              
-              if (!NumericVector::is_na(cell_value)) {
-                // Update min
-                if (cell_value < cell_min)
-                  cell_min = cell_value;
-                
-                // Update max
-                if (cell_value > cell_max)
-                  cell_max = cell_value;
-                
-                // Update sum
-                cell_sum += cell_value;
-                
-                // Update n
-                n += 1;
-              }
-            }
-          }
-          for (int bx = 0; bx < r_vec[j-1]; bx++) {
-            for (int by=r_vec[j-1]; by < r; by++) {
-              const int cell_id = (row+bx) * x_ras.ncol + (col+by);
-              const double cell_value = x_values[cell_id];
-              
-              if (!NumericVector::is_na(cell_value)) {
-                // Update min
-                if (cell_value < cell_min)
-                  cell_min = cell_value;
-                
-                // Update max
-                if (cell_value > cell_max)
-                  cell_max = cell_value;
-                
-                // Update sum
-                cell_sum += cell_value;
-                
-                // Update n
-                n += 1;
-              }
-            }
-          }
-        } else {
-          for (int bx = 0; bx < r; bx++) {
-            for (int by=0; by < r; by++) {
-              const int cell_id = (row+bx) * x_ras.ncol + (col+by);
-              const double cell_value = x_values[cell_id];
-              
-              if (!NumericVector::is_na(cell_value)) {
-                // Update min
-                if (cell_value < cell_min)
-                  cell_min = cell_value;
-                
-                // Update max
-                if (cell_value > cell_max)
-                  cell_max = cell_value;
-                
-                // Update sum
-                cell_sum += cell_value;
-                
-                // Update n
-                n += 1;
-              }
-            }
-          }
-        }
-        
-        // Box statistic
-        if (n > 0) {
+    // Box sums (fun == 1) and/or numbers of non-NA cells per box
+    if (fun == 1 || has_na) {
+      H.resize(static_cast<std::size_t>(nrow) * onc);
+      if (has_na) Hc.resize(static_cast<std::size_t>(nrow) * onc);
+      if (fun != 1) count.resize(N_r);
+      cgei::box_rows(v, nrow, ncol, 0, w - 1, onc, H.data(), has_na ? Hc.data() : nullptr,
+                     nthreads);
+      cgei::box_cols(H.data(), has_na ? Hc.data() : nullptr, nrow, onc, 0, w - 1, onr,
+                     nthreads,
+                     [&](const int row, const int c0, const int c1, const double *sum,
+                         const int *cnt) {
+        const std::size_t base = static_cast<std::size_t>(row) * onc;
+        for (int col = c0; col < c1; ++col) {
+          const int n = cnt ? cnt[col - c0] : w * w;
           if (fun == 1) {
-            box_masses[i] = cell_sum;
-            prev_box_mass_sum[cell] = cell_sum;
+            bm[base + col] = n > 0 ? sum[col - c0] : na_real;
           } else {
-            box_masses[i] = (cell_max - cell_min);
-            prev_box_mass_min[cell] = cell_min;
-            prev_box_mass_max[cell] = cell_max;
+            count[base + col] = n;
           }
-        } else {
-          box_masses[i] = NA_REAL;
-          prev_box_mass_sum[cell] = NA_REAL;
-          prev_box_mass_min[cell] = NA_REAL;
-          prev_box_mass_max[cell] = NA_REAL;
         }
+      });
+    }
+
+    // Box ranges (fun != 1)
+    if (fun != 1) {
+      extreme.resize(N_r);
+      cgei::box_extreme<true>(v, nrow, ncol, w, bm, nthreads);
+      cgei::box_extreme<false>(v, nrow, ncol, w, extreme.data(), nthreads);
+      for (std::size_t i = 0; i < N_r; ++i) {
+        bm[i] = (!has_na || count[i] > 0) ? bm[i] - extreme[i] : na_real;
       }
     }
-    
-    // Remove NA and compute Lacunarity based on
+
+    // Remove NA and compute lacunarity
     NumericVector bm_narm = wrap(na_omit(box_masses));
-    
-    // Compute lacunarity
-    double lac = lacunarity(bm_narm, fun, N_r);
-    
-    pb.increment();
-    output[j] = lac;
+    output[j] = lacunarity(bm_narm, fun);
+    progress.tick();
   }
-  
-  return(output);
+  progress.finish();
+  return output;
+}
+
+// Number of distinct non-NA values of x, counted only up to `limit` (stops
+// early). Used by lacunarity() to detect binary rasters without computing all
+// unique values of a continuous raster.
+// [[Rcpp::export]]
+int n_distinct_upto(const Rcpp::NumericVector &x, const int limit) {
+  std::vector<double> seen;
+  for (R_xlen_t i = 0; i < x.size(); ++i) {
+    const double v = x[i];
+    if (std::isnan(v)) continue;
+    if (std::find(seen.begin(), seen.end(), v) == seen.end()) {
+      seen.push_back(v);
+      if (static_cast<int>(seen.size()) >= limit) break;
+    }
+  }
+  return static_cast<int>(seen.size());
 }

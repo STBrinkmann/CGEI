@@ -1,167 +1,200 @@
 #include <Rcpp.h>
-#include <chrono>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <utility>
+#include <vector>
+
+#include "parallel_progress.h"
 #include "rsinfo.h"
-#include "rasterutils.h"
-#include "bresenham.h"
-#include "integrate.h"
+#include "viewshed_engine.h"
+
+// [[Rcpp::plugins(openmp)]]
 
 using namespace Rcpp;
 
+namespace {
+
+struct VviObservers {
+  std::vector<long long> cell;  // 0-based linear index, -1 if invalid
+  std::vector<int> row, col;
+  std::vector<int> order;       // valid observers in Morton order
+};
+
+VviObservers prepare(const IntegerVector &x0, const IntegerVector &y0, const RasterInfo &ras) {
+  if (x0.size() != y0.size()) Rcpp::stop("x0 and y0 must have the same length.");
+  const int n = x0.size();
+  VviObservers o;
+  o.cell.assign(n, -1);
+  o.row.assign(n, -1);
+  o.col.assign(n, -1);
+  std::vector<std::pair<std::uint64_t, int>> keys;
+  keys.reserve(n);
+  for (int k = 0; k < n; ++k) {
+    if (IntegerVector::is_na(x0[k]) || IntegerVector::is_na(y0[k])) continue;
+    const int col = x0[k] - 1;  // R (1-based) -> C++ (0-based)
+    const int row = y0[k] - 1;
+    if (row < 0 || row >= ras.nrow || col < 0 || col >= ras.ncol) continue;
+    o.row[k] = row;
+    o.col[k] = col;
+    o.cell[k] = static_cast<long long>(row) * ras.ncol + col;
+    keys.emplace_back(cgei::morton_key(row, col), k);
+  }
+  std::sort(keys.begin(), keys.end());
+  for (const auto &p : keys) o.order.push_back(p.second);
+  return o;
+}
+
+// Visible cells (1-based, sorted) and potential viewshed (cells reached by a
+// line of sight inside the raster with a valid height; 1-based, sorted) of
+// every observer. If counts_only, only the two set sizes are stored.
+struct VviResult {
+  std::vector<std::vector<int>> visible, seen;
+  std::vector<int> n_visible, n_seen;
+};
+
+VviResult run_vvi(const NumericVector &dsm, const NumericVector &dsm_values, const IntegerVector &x0,
+                  const IntegerVector &y0, const NumericVector &h0, const int radius,
+                  const int ncores, const bool display_progress, const bool early_stop,
+                  const bool counts_only) {
+  const RasterInfo ras(dsm);
+  if (dsm_values.size() != static_cast<R_xlen_t>(ras.nrow) * ras.ncol)
+    Rcpp::stop("dsm_values does not match the dimensions of dsm.");
+  if (static_cast<double>(ras.nrow) * ras.ncol >= 2147483647.0)
+    Rcpp::stop("The DSM has too many cells to return R cell numbers.");
+  if (radius < 1) Rcpp::stop("radius must be at least 1.");
+
+  const VviObservers obs = prepare(x0, y0, ras);
+  const int n = static_cast<int>(obs.cell.size());
+  if (h0.size() != n) Rcpp::stop("h0 must have the same length as x0.");
+
+  const int r = static_cast<int>(std::round(radius / ras.res));
+  cgei::LosTable T(r);
+  if (!T.bind(ras.ncol)) Rcpp::stop("Raster too large for the radius.");
+
+  const double *dsm_v = dsm_values.begin();
+  const double *h0_v = h0.begin();
+  const int nthreads = cgei::resolve_threads(ncores);
+  // Block maxima for the early-termination bounds (an empty grid if disabled)
+  const cgei::BlockMax bm(dsm_v, early_stop ? ras.nrow : 0, early_stop ? ras.ncol : 0, nthreads);
+
+  VviResult res;
+  res.n_visible.assign(n, 0);
+  res.n_seen.assign(n, 0);
+  if (!counts_only) {
+    res.visible.resize(n);
+    res.seen.resize(n);
+  }
+
+  std::vector<cgei::SweepScratch> scratch;
+  scratch.reserve(nthreads);
+  for (int t = 0; t < nthreads; ++t) scratch.emplace_back(T);
+
+  const int nvalid = static_cast<int>(obs.order.size());
+  cgei::ParallelProgress progress(nvalid, display_progress);
+  const int ncov = static_cast<int>(T.cover_dr.size());
 
 #ifdef _OPENMP
-#include <omp.h>
+#pragma omp parallel for num_threads(nthreads) schedule(dynamic, 16)
 #endif
-// [[Rcpp::plugins(openmp)]]
-// [[Rcpp::depends(RcppProgress)]]
-#include <progress.hpp>
-#include "eta_progress_bar.h"
+  for (int idx = 0; idx < nvalid; ++idx) {
+    if (progress.aborted()) continue;
+    cgei::SweepScratch &S = scratch[cgei::omp_thread_num()];
+    const int k = obs.order[idx];
+    const long long cell0 = obs.cell[k];
+    const int row0 = obs.row[k], col0 = obs.col[k];
+    const double hk = h0_v[k];
 
+    // Visible cells: the observer cell plus everything found by the sweep.
+    S.first_visit(T.ref_center());
+    int n_vis = 1;
+    std::vector<int> *vis = counts_only ? nullptr : &res.visible[k];
+    if (vis) vis->push_back(static_cast<int>(cell0) + 1);
+    if (hk > dsm_v[cell0]) {
+      double qbound[4] = {0, 0, 0, 0};
+      if (early_stop) cgei::quadrant_bounds(T, bm, row0, col0, hk, qbound);
+      auto visit = [&](const int s, const long long cell) {
+        if (!S.first_visit(T.step[s].ref)) return;
+        ++n_vis;
+        if (vis) vis->push_back(static_cast<int>(cell) + 1);  // C++ -> R cell number
+      };
+      const bool interior = row0 - r >= 0 && row0 + r < ras.nrow && col0 - r >= 0 &&
+                            col0 + r < ras.ncol;
+      if (interior) {
+        cgei::sweep_lines<false>(T, dsm_v, ras.nrow, ras.ncol, cell0, row0, col0, hk,
+                                 qbound, early_stop, S, visit);
+      } else {
+        cgei::sweep_lines<true>(T, dsm_v, ras.nrow, ras.ncol, cell0, row0, col0, hk,
+                                qbound, early_stop, S, visit);
+      }
+    }
+    S.reset();
+    if (vis) std::sort(vis->begin(), vis->end());
+    res.n_visible[k] = n_vis;
+
+    // Potential viewshed: all cells reached by any line of sight (static
+    // geometry) that lie inside the raster and have a valid height.
+    std::vector<int> *seen = counts_only ? nullptr : &res.seen[k];
+    int n_seen = 0;
+    bool own_done = false;
+    for (int c = 0; c < ncov; ++c) {
+      const int rr = row0 + T.cover_dr[c];
+      const int cc = col0 + T.cover_dc[c];
+      if (!own_done && (rr > row0 || (rr == row0 && cc > col0))) {
+        // keep the output sorted: the observer cell goes before the first
+        // covered cell that follows it in row-major order
+        ++n_seen;
+        if (seen) seen->push_back(static_cast<int>(cell0) + 1);
+        own_done = true;
+      }
+      if (rr < 0 || rr >= ras.nrow || cc < 0 || cc >= ras.ncol) continue;
+      const long long cell = static_cast<long long>(rr) * ras.ncol + cc;
+      if (std::isnan(dsm_v[cell])) continue;
+      ++n_seen;
+      if (seen) seen->push_back(static_cast<int>(cell) + 1);
+    }
+    if (!own_done) {
+      ++n_seen;
+      if (seen) seen->push_back(static_cast<int>(cell0) + 1);
+    }
+    res.n_seen[k] = n_seen;
+    progress.tick();
+  }
+  progress.finish();  // throws if the user interrupted
+  return res;
+}
+
+}  // namespace
+
+// Visible cells and potential viewshed of every observer (R cell numbers).
 // [[Rcpp::export]]
-Rcpp::List VVI_cpp(Rcpp::S4 &dsm, const Rcpp::NumericVector &dsm_values,
+Rcpp::List VVI_cpp(const Rcpp::NumericVector &dsm, const Rcpp::NumericVector &dsm_values,
                    const Rcpp::IntegerVector &x0, const Rcpp::IntegerVector &y0,
                    const Rcpp::NumericVector &h0, const int radius,
-                   const int ncores=1, const bool display_progress=false)
-{
-  // Cells from x0, y0
-  Rcpp::IntegerVector x0_o = x0-1;
-  Rcpp::IntegerVector y0_o = y0-1;
-  const Rcpp::IntegerVector input_cells = cellFromColRowSensitive(dsm, x0_o, y0_o);
-  
-  // Basic raster information
-  const RasterInfo dsm_ras(dsm);
-  
-  // Parameters
-  const int r = (int)round(radius/dsm_ras.res);
-  const int nc_ref = (2*r)+1, nr_ref = (2*r)+1;
-  const int x0_ref = r, y0_ref = x0_ref;
-  const int c0_ref = y0_ref*nc_ref + x0_ref;
-  
-  // Pre-results
-  std::vector<std::vector<int>> allViewsheds(input_cells.size());
-  std::vector<std::set<int>> allSeenCells(input_cells.size());
-  
-  // Protoptype of Line of Sight (LoS) paths:
-  // Will be used as a reference for all input points
-  const Rcpp::IntegerVector los_ref_vec = LoS_reference(x0_ref, y0_ref, r, nc_ref);
-  const Rcpp::IntegerVector los_start = shared_LoS(r, los_ref_vec);
-  
-  // Progress bar
-  ETAProgressBar pb_ETA;
-  Progress pb(input_cells.size(), display_progress, pb_ETA);
-  
-  // Main loop
-#if defined(_OPENMP)
-  omp_set_num_threads(ncores);
-#pragma omp parallel for schedule(dynamic)
-#endif
-  for(int k = 0; k < input_cells.size(); ++k){
-    if ( !pb.is_aborted() ) {
-      Progress::check_abort();
-      
-      const int this_input_cell = input_cells[k];
-      
-      // Check if this_input_cell is NA_INTEGER
-      if(Rcpp::IntegerVector::is_na(this_input_cell)){
-        pb.increment();
-        continue;
-      }
-      
-      // Viewshed
-      std::vector<int> viewshed(nc_ref*nr_ref, NA_INTEGER);
-      
-      // Viewshed at x0/y0 is always visible
-      viewshed[c0_ref] = input_cells[k]+1;
-      
-      std::set<int> seenCells; // Set for storing unique cells within the viewshed
-      seenCells.insert(input_cells[k]+1);
-      
-      // A: Viewshed Analysis
-      // Eye-level height at x0/y0 > DSM height?
-      if(true){ // h0[k] > dsm_values[this_input_cell]
-        
-        // Parameter for projecting reference cell to true cell values
-        const int x = this_input_cell - c0_ref - r*(dsm_ras.ncol-nc_ref);
-        
-        // Vector for storing max tangent from previous LoS
-        std::vector<double> max_tan_vec(r, -9999.0);
-        
-        // Iterate over all LoS paths
-        for(int i = 0; i < (r*8); ++i){
-          // Re-use tangents calculated from prior LoS or assign -9999.0
-          const int k_i = los_start[i];
-          double max_tan = (k_i > 1) ? max_tan_vec[k_i-1] : -9999.0;
-          
-          // Iterate over all cells of this LoS path starting at k_i
-          for(int j = k_i; j < r; ++j){
-            
-            // This LoS path cell
-            const int los_ref_cell = los_ref_vec[i*r + j];
-            
-            if(!Rcpp::IntegerVector::is_na(los_ref_cell)){
-              
-              // Project reference cell to true cell value
-              const int cell = x + los_ref_cell + trunc(los_ref_cell/nc_ref)*(dsm_ras.ncol-nc_ref);
-              
-              // Test if this LoS path cell is within DSM raster
-              const int row = trunc(cell/dsm_ras.ncol);
-              const int col = cell - (row * dsm_ras.ncol);
-              const int dcol = abs(col-x0_o[k]);
-              
-              if(!(cell<0 || cell >= dsm_ras.ncell || dcol>r)){
-                // DSM height at this LoS path cell
-                const double h_cell = dsm_values[cell];
-                
-                // Test if h_cell is NA
-                if(Rcpp::NumericVector::is_na(h_cell)){
-                  continue;
-                }
-                
-                // Compute tangent of x0/y0 (observer location) and this LoS path cell
-                const double distance_traveled = sqrt(
-                  (x0_o[k] - col)*(x0_o[k] - col) + (y0_o[k] - row)*(y0_o[k] - row)
-                );
-                const double this_tan = (h_cell - h0[k]) / (distance_traveled);
-                
-                // Update viewshed and max tangent
-                if(this_tan > max_tan && h0[k] > dsm_values[this_input_cell]){
-                  max_tan = this_tan;
-                  viewshed[los_ref_cell] = cell+1;
-                }
-                
-                // Insert cell into set
-                seenCells.insert(cell+1);
-              }
-              
-              max_tan_vec[j] = max_tan;
-            } else {
-              break;
-            }
-          }
-        }
-      }
-      
-      viewshed.erase(std::remove_if(std::begin(viewshed),
-                                    std::end(viewshed),
-                                    [](const int& value) { return Rcpp::IntegerVector::is_na(value); }),
-                                    std::end(viewshed));
-      
-      // Directly store results in pre-allocated vectors
-      allViewsheds[k] = viewshed;
-      allSeenCells[k] = seenCells;
-      
-      pb.increment();
-    }
+                   const int ncores = 1, const bool display_progress = false,
+                   const bool early_stop = true) {
+  VviResult res = run_vvi(dsm, dsm_values, x0, y0, h0, radius, ncores, display_progress,
+                          early_stop, false);
+  const int n = static_cast<int>(res.n_visible.size());
+  Rcpp::List output(n);
+  for (int k = 0; k < n; ++k) {
+    output[k] = Rcpp::List::create(Rcpp::Named("visible_cells") = Rcpp::wrap(res.visible[k]),
+                                   Rcpp::Named("viewshed") = Rcpp::wrap(res.seen[k]));
   }
-  
-  // Create the output list outside of the parallel region
-  Rcpp::List output(input_cells.size());
-  for(int i = 0; i < input_cells.size(); ++i){
-    Rcpp::List observationResult = Rcpp::List::create(
-      Rcpp::Named("visible_cells") = Rcpp::wrap(allViewsheds[i]),
-      Rcpp::Named("viewshed") = Rcpp::wrap(std::vector<int>(allSeenCells[i].begin(), allSeenCells[i].end()))
-    );
-    output[i] = observationResult;
-  }
-  
   return output;
+}
+
+// Only the number of visible cells and of potential viewshed cells per
+// observer (enough for vvi(mode = "VVI")); 0 for invalid observers.
+// [[Rcpp::export]]
+Rcpp::List VVI_count_cpp(const Rcpp::NumericVector &dsm, const Rcpp::NumericVector &dsm_values,
+                         const Rcpp::IntegerVector &x0, const Rcpp::IntegerVector &y0,
+                         const Rcpp::NumericVector &h0, const int radius,
+                         const int ncores = 1, const bool display_progress = false,
+                         const bool early_stop = true) {
+  VviResult res = run_vvi(dsm, dsm_values, x0, y0, h0, radius, ncores, display_progress,
+                          early_stop, true);
+  return Rcpp::List::create(Rcpp::Named("n_visible") = Rcpp::wrap(res.n_visible),
+                            Rcpp::Named("n_viewshed") = Rcpp::wrap(res.n_seen));
 }

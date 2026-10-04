@@ -70,7 +70,6 @@
 #' @importFrom sf st_crs st_as_sf st_transform st_geometry_type st_union st_cast st_line_sample st_set_geometry st_bbox st_buffer st_coordinates st_as_sfc st_nearest_feature
 #' @importFrom dplyr rename mutate relocate everything n_distinct
 #' @importFrom terra crs rast res crop mask vect xyFromCell extract cellFromXY colFromX rowFromY writeRaster
-#' @importFrom raster raster
 #' @importFrom checkmate assert
 #' @importFrom utils txtProgressBar setTxtProgressBar
 vvi <- function(observer, dsm_rast, dtm_rast,
@@ -100,6 +99,10 @@ vvi <- function(observer, dsm_rast, dtm_rast,
   checkmate::assert(methods::is(max_distance, "numeric"), "max_distance must be a numeric")
   checkmate::assert(max_distance > 0, "max_distance must be greater than 0")
   max_distance <- round(max_distance, digits = 0)
+  checkmate::assert(max_distance >= 1, "max_distance must be at least 1 (it is rounded to whole map units)")
+  
+  # Check cores
+  cores <- check_cores(cores)
   
   # Check observer_height
   checkmate::assert(methods::is(observer_height, "numeric"), "observer_height must be a numeric")
@@ -136,12 +139,12 @@ vvi <- function(observer, dsm_rast, dtm_rast,
   max_aoi <- observer %>% 
     sf::st_bbox() %>% 
     sf::st_as_sfc() %>% 
-    sf::st_buffer(max_distance)
+    sf::st_buffer(max_distance + 2 * terra::res(dsm_rast)[1])
   
-  # Crop DSM to max AOI
-  dsm_rast <- terra::crop(dsm_rast, terra::vect(max_aoi))
+  # Crop DSM to max AOI (two extra cells, so the full circle of every observer is kept)
+  dsm_rast <- terra::crop(dsm_rast, terra::vect(max_aoi), snap = "out")
   dsm_vec <- terra::values(dsm_rast, mat = FALSE)
-  dsm_cpp_rast <- dsm_rast %>% terra::rast() %>% raster::raster()
+  dsm_cpp_rast <- raster_geometry(dsm_rast)
   
   # Coordinates of start point
   x0 <- sf::st_coordinates(observer)[,1]
@@ -220,6 +223,18 @@ vvi <- function(observer, dsm_rast, dtm_rast,
     })
   }
   
+  if (mode == "VVI" && !by_row) {
+    # Only the numbers of visible and potentially visible cells are needed
+    counts <- VVI_count_cpp(dsm = dsm_cpp_rast, dsm_values = dsm_vec,
+                            x0 = c0, y0 = r0, radius = max_distance, h0 = height_0_vec,
+                            ncores = cores, display_progress = progress)
+    observer <- observer %>% 
+      dplyr::mutate(VVI = counts$n_visible / counts$n_viewshed,
+                    n_visible_cells = counts$n_visible) %>% 
+      dplyr::select(VVI, n_visible_cells, dplyr::everything())
+    return(observer)
+  }
+  
   # Calculate viewsheds. Returns a list:
   # visible_cells: Cells that are visible from the observer
   # viewshed: All cells that fall within the viewshed regardless of visibility
@@ -231,37 +246,12 @@ vvi <- function(observer, dsm_rast, dtm_rast,
     # VVI:
     # % of visible cells to all cells in the viewshed
     if(by_row) {
-      # Calculates the number of viewshed cells for each observer, by feature
-      n_viewshed <- lapply(seq_along(vvi_list), function(i) {
-        viewshed = vvi_list[[i]]$viewshed
-        data.frame(
-          row_id_for_cumulative_vvi = rep(observer$row_id_for_cumulative_vvi[i], length(viewshed)),
-          viewshed
-        )
-      }) %>% 
-        do.call(rbind, .)
-      
-      n_viewshed <- n_viewshed %>% 
-        dplyr::distinct() %>%
-        dplyr::group_by(row_id_for_cumulative_vvi) %>%
-        dplyr::reframe(n_viewshed = dplyr::n()) %>% 
-        dplyr::pull(n_viewshed)
-      
-      # Calculates the number of visible cells for each observer, by feature
-      n_visible_cells <- lapply(seq_along(vvi_list), function(i) {
-        visible_cells = vvi_list[[i]]$visible_cells
-        data.frame(
-          row_id_for_cumulative_vvi = rep(observer$row_id_for_cumulative_vvi[i], length(visible_cells)),
-          visible_cells
-        )
-      }) %>% 
-        do.call(rbind, .)
-      
-      n_visible_cells <- n_visible_cells %>% 
-        dplyr::distinct() %>%
-        dplyr::group_by(row_id_for_cumulative_vvi) %>%
-        dplyr::reframe(n_visible_cells = dplyr::n()) %>% 
-        dplyr::pull(n_visible_cells)
+      # Number of distinct viewshed / visible cells of every feature
+      # (NA for features without any valid observer point)
+      n_viewshed <- count_cells_by_feature(vvi_list, "viewshed", observer$row_id_for_cumulative_vvi,
+                                           nrow(.observer), terra::ncell(dsm_rast))
+      n_visible_cells <- count_cells_by_feature(vvi_list, "visible_cells", observer$row_id_for_cumulative_vvi,
+                                                nrow(.observer), terra::ncell(dsm_rast))
       
       .observer <- .observer %>% 
         dplyr::mutate(VVI = n_visible_cells / n_viewshed,
@@ -292,21 +282,9 @@ vvi <- function(observer, dsm_rast, dtm_rast,
         vvi$viewshed
       }))
       
-      # Calculates the number of visible cells for each observer, by feature
-      n_visible_cells <- lapply(seq_along(vvi_list), function(i) {
-        visible_cells = vvi_list[[i]]$visible_cells
-        data.frame(
-          row_id_for_cumulative_vvi = rep(observer$row_id_for_cumulative_vvi[i], length(visible_cells)),
-          visible_cells
-        )
-      }) %>% 
-        do.call(rbind, .)
-      
-      n_visible_cells <- n_visible_cells %>% 
-        dplyr::distinct() %>%
-        dplyr::group_by(row_id_for_cumulative_vvi) %>%
-        dplyr::reframe(n_visible_cells = dplyr::n()) %>% 
-        dplyr::pull(n_visible_cells)
+      # Number of distinct visible cells of every feature
+      n_visible_cells <- count_cells_by_feature(vvi_list, "visible_cells", observer$row_id_for_cumulative_vvi,
+                                                nrow(.observer), terra::ncell(dsm_rast))
       
       .observer <- .observer %>% 
         dplyr::mutate(CVVI = n_visible_cells / dplyr::n_distinct(viewshed_cells)) %>% 
@@ -383,4 +361,16 @@ sf_to_POINT <- function(x, spacing, dsm_rast) {
   } else {
     return(x)
   }
+}
+
+# Number of distinct cells (element `what` of the VVI_cpp() result) per feature
+# (row id 1..n_features); NA for features without any valid observer point.
+count_cells_by_feature <- function(vvi_list, what, row_id, n_features, ncell) {
+  cells <- lapply(vvi_list, `[[`, what)
+  ids <- rep(row_id, lengths(cells))
+  key <- ids * (ncell + 1) + unlist(cells, use.names = FALSE)
+  keep <- !duplicated(key)
+  n <- tabulate(ids[keep], nbins = n_features)
+  n[!(seq_len(n_features) %in% row_id)] <- NA
+  n
 }

@@ -69,7 +69,6 @@
 #' @importFrom sf st_crs st_as_sf st_transform st_geometry_type st_union st_cast st_line_sample st_set_geometry st_bbox st_buffer st_coordinates st_as_sfc
 #' @importFrom dplyr rename mutate relocate everything
 #' @importFrom terra crs rast res crop mask vect xyFromCell extract cellFromXY colFromX rowFromY writeRaster
-#' @importFrom raster raster
 #' @importFrom checkmate assert
 #' @importFrom utils txtProgressBar setTxtProgressBar
 vgvi <- function(observer, dsm_rast, dtm_rast, greenspace_rast,
@@ -102,6 +101,7 @@ vgvi <- function(observer, dsm_rast, dtm_rast, greenspace_rast,
   checkmate::assert(methods::is(max_distance, "numeric"), "max_distance must be a numeric")
   checkmate::assert(max_distance > 0, "max_distance must be greater than 0")
   max_distance <- round(max_distance, digits = 0)
+  checkmate::assert(max_distance >= 1, "max_distance must be at least 1 (it is rounded to whole map units)")
   
   # Check spacing
   checkmate::assert(methods::is(spacing, "numeric") | is.null(spacing), "spacing must be a numeric or NULL")
@@ -124,6 +124,9 @@ vgvi <- function(observer, dsm_rast, dtm_rast, greenspace_rast,
                  exponential = 2,
                  none = 3)
   
+  # Check cores
+  cores <- check_cores(cores)
+  
   
   #### 2. Convert observer to points
   if(progress) {
@@ -135,21 +138,22 @@ vgvi <- function(observer, dsm_rast, dtm_rast, greenspace_rast,
   
   
   #### 3. Prepare data for viewshed analysis ####
-  # Max AOI
+  # Max AOI (two extra cells, so the full circle of every observer is kept)
   max_aoi <- observer %>% 
     sf::st_bbox() %>% 
     sf::st_as_sfc() %>% 
-    sf::st_buffer(max_distance)
+    sf::st_buffer(max_distance + 2 * terra::res(dsm_rast)[1])
   
   # Crop DSM to max AOI
-  dsm_rast <- terra::crop(dsm_rast, terra::vect(max_aoi))
-  greenspace_rast <- terra::crop(greenspace_rast, terra::vect(max_aoi))
+  dsm_rast <- terra::crop(dsm_rast, terra::vect(max_aoi), snap = "out")
+  greenspace_rast <- terra::crop(greenspace_rast, terra::vect(max_aoi), snap = "out")
   
   dsm_vec <- terra::values(dsm_rast, mat = FALSE)
-  greenspace_vec <- terra::values(greenspace_rast, mat = FALSE)
+  greenspace_vec <- as.numeric(terra::values(greenspace_rast, mat = FALSE))
   
-  dsm_cpp_rast <- dsm_rast %>% terra::rast() %>% raster::raster()
-  greenspace_cpp_rast <- greenspace_rast %>% terra::rast() %>% raster::raster()
+  # Raster geometry for the C++ code
+  dsm_cpp_rast <- raster_geometry(dsm_rast)
+  greenspace_cpp_rast <- raster_geometry(greenspace_rast)
   
   # Coordinates of start point
   x0 <- sf::st_coordinates(observer)[,1]
@@ -238,8 +242,7 @@ vgvi <- function(observer, dsm_rast, dtm_rast, greenspace_rast,
                           x0 = c0, y0 = r0, radius = max_distance, h0 = height_0_vec,
                           fun = mode, m = m, b = b, ncores = cores, display_progress = progress)
   
-  valid_values <- unlist(lapply(vgvi_values, is.numeric), use.names = FALSE)
-  observer[["VGVI"]][valid_values] <- vgvi_values[valid_values]
+  observer[["VGVI"]] <- vgvi_values
   
   return(observer)
 }

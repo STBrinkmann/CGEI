@@ -23,7 +23,6 @@
 #' @export
 #' @importFrom sf st_crs st_geometry_type st_as_sf st_bbox
 #' @importFrom dplyr rename
-#' @importFrom raster raster
 #' @importFrom terra rast vect values
 sf_interpolat_IDW <- function(observer, v, aoi = NULL, max_distance = Inf,
                               n = Inf, beta = 2, raster_res = NULL,
@@ -104,7 +103,7 @@ sf_interpolat_IDW <- function(observer, v, aoi = NULL, max_distance = Inf,
   
   if (progress) setTxtProgressBar(pb, 2)
   
-  iwd_cpp_rast <- iwd_rast %>% terra::rast() %>% raster::raster()
+  iwd_cpp_rast <- raster_geometry(iwd_rast)
   iwd_raster_vec <- terra::values(iwd_rast, mat = FALSE)
   
   if (progress) setTxtProgressBar(pb, 3)

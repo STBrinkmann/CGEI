@@ -1,3 +1,28 @@
+#' Natural breaks
+#'
+#' Breaks of the natural breaks classification of `values` into `n_classes`
+#' classes, identical to `classInt::classIntervals(values, n_classes, style)$brks`
+#' for `style = "jenks"` and the same optimal partition for `style = "fisher"`
+#' (see `jenks_breaks_cpp()`), but orders of magnitude faster.
+#' With fewer distinct values than classes, every distinct value becomes a class
+#' (classInt's "unique" breaks).
+#'
+#' @noRd
+#' @keywords internal
+jenks_breaks <- function(values, n_classes = 9, style = c("fisher", "jenks")) {
+  style <- match.arg(style)
+  values <- values[is.finite(values)]
+  u <- sort(unique(values))
+  if (length(u) == 0) stop("No finite values to classify.")
+  if (length(u) == 1) return(c(u, u))
+  n <- min(as.integer(n_classes), length(u))
+  if (n == length(u)) {
+    du <- diff(u)
+    return(c(u[1] - mean(du) / 2, u[-length(u)] + du / 2, u[length(u)] + mean(du) / 2))
+  }
+  jenks_breaks_cpp(values, n, style)
+}
+
 #' Reclassify Raster Layer Using Jenks Natural Breaks
 #'
 #' This function reclassifies a given raster layer into specified number of classes
@@ -14,24 +39,25 @@
 #' specified number of classes based on the Jenks natural breaks.
 #'
 #' @importFrom terra classify
-#' @importFrom classInt classIntervals
 #' @keywords internal
 reclassify_jenks <- function(raster_layer, n_classes = 9) {
-  # Extract values from the raster layer
-  values <- unlist(terra::spatSample(raster_layer, min(50000, terra::ncell(raster_layer)), na.rm = TRUE), use.names = FALSE)
+  # Extract values from the raster layer (at most 50,000 of the non-NA cells)
+  n_valid <- terra::global(raster_layer, "notNA")[1, 1]
+  values <- unlist(terra::spatSample(raster_layer, min(50000, n_valid), na.rm = TRUE), use.names = FALSE)
   style <- ifelse(terra::ncell(raster_layer) > 5000, "fisher", "jenks")
-  
+
   # Compute Jenks natural breaks
-  breaks <- classInt::classIntervals(values, n_classes, style = style,
-                                     warnLargeN = FALSE)$brks
+  breaks <- jenks_breaks(values, n_classes, style = style)
   breaks[1] <- -Inf
   breaks[length(breaks)] <- Inf
-  
+
   # Reclassify the raster layer based on the breaks
   # Create a matrix for reclassification, with the lower limit, upper limit, and new class value
-  rcl_mat <- matrix(c(head(breaks, -1), tail(breaks, -1), 1:n_classes), ncol = 3)
+  # (one row per class; there are fewer than n_classes classes if the layer
+  # has fewer distinct values)
+  rcl_mat <- cbind(utils::head(breaks, -1), utils::tail(breaks, -1), seq_len(length(breaks) - 1))
   reclassified_layer <- terra::classify(raster_layer, rcl_mat, include.lowest = TRUE)
-  
+
   return(reclassified_layer)
 }
 
@@ -75,7 +101,6 @@ reclassify_jenks <- function(raster_layer, n_classes = 9) {
 #' gavi(x, lac)
 #'
 #' @importFrom terra values rast
-#' @importFrom raster raster
 #' @importFrom checkmate assert_class assert_set_equal assert_true
 #' @export
 gavi <- function(x, lac, na.rm = TRUE, cores = 1, progress = FALSE) {
@@ -84,10 +109,12 @@ gavi <- function(x, lac, na.rm = TRUE, cores = 1, progress = FALSE) {
   checkmate::assert_set_equal(names(lac), c("name", "i", "r", "ln(r)", "Lac", "ln(Lac)"))
   checkmate::assert_class(na.rm, "logical")
   checkmate::assert_true(length(unique(lac[["i"]])) == terra::nlyr(x))
+  cores <- check_cores(cores)
   
   # Convert raster to matrix
   x_mat <- terra::values(x, mat = TRUE)
-  x_rast <- x %>% terra::rast() %>% raster::raster()
+  storage.mode(x_mat) <- "double"
+  x_rast <- raster_geometry(x)
   
   # Apply focal C++ function
   lac <- lac[,c("i", "r", "Lac")] %>% as.matrix()

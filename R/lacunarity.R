@@ -173,16 +173,28 @@ lacunarity <- function(x, r_vec = NULL, r_max = NULL, plot = FALSE, plot_path = 
     
     r_vec <- unique(as.integer(r_vec))
     
-    # Is r binary? (e.g. Greenspace raster)
-    lac_fun <- as.integer(nrow(terra::unique(this_x)) <= 2)
+    # Box sizes larger than the raster are not possible
+    this_r_vec <- r_vec
+    too_large <- this_r_vec > min(dim(this_x)[1:2])
+    if (any(too_large)) {
+      warning(paste0("Box sizes larger than the raster (", paste(this_r_vec[too_large], collapse = ", "),
+                     ") are ignored for ", names(this_x)[1], "."), call. = FALSE)
+      this_r_vec <- this_r_vec[!too_large]
+    }
+    if (length(this_r_vec) == 0) {
+      stop("No valid box size: all values of r_vec are larger than the raster.")
+    }
     
     # Convert raster to vector
-    this_x_vec <- terra::values(this_x, mat = FALSE)
-    this_x_rast <- this_x %>% terra::rast() %>% raster::raster()
+    this_x_vec <- as.numeric(terra::values(this_x, mat = FALSE))
+    this_x_rast <- raster_geometry(this_x)
+    
+    # Is r binary? (e.g. Greenspace raster; at most 2 distinct values)
+    lac_fun <- as.integer(n_distinct_upto(this_x_vec, 3L) <= 2)
     
     # Calculate Lacunarity for all w
     this_lac <- rcpp_lacunarity(x = this_x_rast, x_values = this_x_vec,
-                                r_vec = r_vec,
+                                r_vec = this_r_vec,
                                 fun = lac_fun,
                                 ncores = cores,
                                 display_progress = progress)
@@ -190,8 +202,8 @@ lacunarity <- function(x, r_vec = NULL, r_max = NULL, plot = FALSE, plot_path = 
     this_out <- dplyr::tibble(
       name = rep(names(this_x)[1], length(this_lac)),
       i = i,
-      r = r_vec,
-      `ln(r)` = log(r_vec),
+      r = this_r_vec,
+      `ln(r)` = log(this_r_vec),
       Lac = this_lac,
       `ln(Lac)` = log(this_lac)
     )
