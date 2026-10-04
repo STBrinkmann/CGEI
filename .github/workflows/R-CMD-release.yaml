@@ -5,47 +5,24 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write
+
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
-        uses: actions/checkout@v2
-      
-      - name: Set up R
-        uses: r-lib/actions/setup-r@v2
-      
-      - name: Install required R packages
-        run: |
-          install.packages("remotes")
-          remotes::install_github("r-lib/desc")
-      
-      - name: Get version from DESCRIPTION
-        id: get-version
-        run: |
-          library(desc)
-          description <- desc::desc_get_field("Version")
-          echo "::set-output name=VERSION::$description"
-      
-      - name: Get latest release
-        id: latest-release
-        uses: actions/github-script@v5
-        with:
-          script: |
-            const { data: latestRelease } = await github.rest.repos.getLatestRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-            });
-            return latestRelease.tag_name;
-          result-encoding: string
-      
-      - name: Create Release if version changed
-        if: steps.get-version.outputs.VERSION != steps.latest-release.outputs.result
-        uses: actions/create-release@v1
+        uses: actions/checkout@v4
+
+      - name: Create release if version changed
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.get-version.outputs.VERSION }}
-          release_name: Release ${{ steps.get-version.outputs.VERSION }}
-          draft: false
-          prerelease: false
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep -m1 '^Version:' DESCRIPTION | sed 's/^Version:[[:space:]]*//' | tr -d '[:space:]')
+          echo "DESCRIPTION version: $VERSION"
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists, nothing to do."
+          else
+            gh release create "$VERSION" --target "$GITHUB_SHA" --title "Release $VERSION" --generate-notes
+          fi
