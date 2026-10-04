@@ -346,6 +346,126 @@ inline void sweep_lines(const LosTable &T, const double *dsm, const int nrow,
   }
 }
 
+// Potential viewshed (VVI): the cells reached by any line of sight (static
+// geometry, LosTable::cover_*) as runs of consecutive columns per row offset,
+// in row-major order. The observer cell itself is not part of the runs.
+struct CoverRuns {
+  struct Run {
+    int dr, lo, hi;
+  };
+  std::vector<Run> runs;
+
+  explicit CoverRuns(const LosTable &T) {
+    for (std::size_t c = 0; c < T.cover_dr.size(); ++c) {
+      const int dr = T.cover_dr[c], dc = T.cover_dc[c];
+      if (dr == 0 && dc == 0) continue;
+      if (!runs.empty() && runs.back().dr == dr && runs.back().hi + 1 == dc) {
+        runs.back().hi = dc;
+      } else {
+        runs.push_back({dr, dc, dc});
+      }
+    }
+  }
+
+  // Calls f(row, c0, c1) for the part of every run that lies inside an
+  // nrow x ncol raster, for an observer at (row0, col0); row-major order.
+  template <class F>
+  void for_each(const int row0, const int col0, const int nrow, const int ncol, F f) const {
+    for (const Run &run : runs) {
+      const int rr = row0 + run.dr;
+      if (rr < 0 || rr >= nrow) continue;
+      const int c0 = std::max(col0 + run.lo, 0);
+      const int c1 = std::min(col0 + run.hi, ncol - 1);
+      if (c0 <= c1) f(rr, c0, c1);
+    }
+  }
+};
+
+// Number of valid (non-NaN) cells in a part of a row, from row-wise prefix
+// counts (only stored if the raster has NaN cells).
+struct ValidPrefix {
+  int ncol = 0;
+  bool all_valid = true;
+  std::vector<int> prefix;  // nrow x (ncol + 1): valid cells left of column c
+
+  ValidPrefix(const double *v, const int nrow, const int ncol_, const int nthreads) : ncol(ncol_) {
+    const long long n = static_cast<long long>(nrow) * ncol;
+    int has_nan = 0;
+#ifdef _OPENMP
+#pragma omp parallel for num_threads(nthreads) reduction(| : has_nan) schedule(static)
+#endif
+    for (long long i = 0; i < n; ++i) has_nan |= std::isnan(v[i]) ? 1 : 0;
+    (void)nthreads;
+    all_valid = has_nan == 0;
+    if (all_valid) return;
+    prefix.assign(static_cast<std::size_t>(nrow) * (ncol + 1), 0);
+#ifdef _OPENMP
+#pragma omp parallel for num_threads(nthreads) schedule(static)
+#endif
+    for (int row = 0; row < nrow; ++row) {
+      const double *src = v + static_cast<std::size_t>(row) * ncol;
+      int *dst = prefix.data() + static_cast<std::size_t>(row) * (ncol + 1);
+      int s = 0;
+      dst[0] = 0;
+      for (int c = 0; c < ncol; ++c) {
+        s += std::isnan(src[c]) ? 0 : 1;
+        dst[c + 1] = s;
+      }
+    }
+  }
+
+  int count(const int row, const int c0, const int c1) const {
+    if (all_valid) return c1 - c0 + 1;
+    const int *p = prefix.data() + static_cast<std::size_t>(row) * (ncol + 1);
+    return p[c1 + 1] - p[c0];
+  }
+};
+
+// Size of the potential viewshed of an observer at (row0, col0): the covered
+// cells inside the raster with a valid height, plus the observer cell.
+inline int count_seen(const CoverRuns &cov, const ValidPrefix &valid, const int row0,
+                      const int col0, const int nrow, const int ncol) {
+  int n = 1;
+  cov.for_each(row0, col0, nrow, ncol,
+               [&](const int rr, const int c0, const int c1) { n += valid.count(rr, c0, c1); });
+  return n;
+}
+
+// Per cell, the number of observers (rows[k], cols[k]) whose potential
+// viewshed contains the cell (out: nrow * ncol values, overwritten), i.e. the
+// counts of count_seen()'s cells over all observers. Uses difference arrays
+// along the rows: O(observers x runs + cells).
+inline void accumulate_seen(const CoverRuns &cov, const double *dsm, const int nrow, const int ncol,
+                            const std::vector<int> &rows, const std::vector<int> &cols,
+                            const int nthreads, int *out) {
+  const std::size_t stride = static_cast<std::size_t>(ncol) + 1;
+  std::vector<int> diff(static_cast<std::size_t>(nrow) * stride, 0);
+  for (std::size_t k = 0; k < rows.size(); ++k) {
+    cov.for_each(rows[k], cols[k], nrow, ncol, [&](const int rr, const int c0, const int c1) {
+      int *d = diff.data() + static_cast<std::size_t>(rr) * stride;
+      ++d[c0];
+      --d[c1 + 1];
+    });
+  }
+#ifdef _OPENMP
+#pragma omp parallel for num_threads(nthreads) schedule(static)
+#endif
+  for (int row = 0; row < nrow; ++row) {
+    const int *d = diff.data() + static_cast<std::size_t>(row) * stride;
+    const double *h = dsm + static_cast<std::size_t>(row) * ncol;
+    int *o = out + static_cast<std::size_t>(row) * ncol;
+    int s = 0;
+    for (int c = 0; c < ncol; ++c) {
+      s += d[c];
+      o[c] = std::isnan(h[c]) ? 0 : s;
+    }
+  }
+  (void)nthreads;
+  for (std::size_t k = 0; k < rows.size(); ++k) {
+    ++out[static_cast<std::size_t>(rows[k]) * ncol + cols[k]];
+  }
+}
+
 // Morton (Z-order) key for cache-friendly processing order of observers.
 inline std::uint64_t morton_key(const std::uint32_t row, const std::uint32_t col) {
   auto spread = [](std::uint64_t v) {

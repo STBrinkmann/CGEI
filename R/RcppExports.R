@@ -45,3 +45,7 @@ VVI_count_cpp <- function(dsm, dsm_values, x0, y0, h0, radius, ncores = 1L, disp
     .Call(`_CGEI_VVI_count_cpp`, dsm, dsm_values, x0, y0, h0, radius, ncores, display_progress, early_stop)
 }
 
+VVI_cells_cpp <- function(dsm, dsm_values, x0, y0, h0, radius, ncores = 1L, display_progress = FALSE, early_stop = TRUE) {
+    .Call(`_CGEI_VVI_cells_cpp`, dsm, dsm_values, x0, y0, h0, radius, ncores, display_progress, early_stop)
+}
+

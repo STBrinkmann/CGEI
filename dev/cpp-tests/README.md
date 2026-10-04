@@ -6,14 +6,16 @@ R / Rcpp dependency:
 | header | used by |
 |---|---|
 | `src/los_geometry.h` | Bresenham lines of sight (`LoS_reference()`) |
-| `src/viewshed_engine.h` | viewshed sweep of `vgvi()`, `vvi()`, `viewshed_list()` |
+| `src/viewshed_engine.h` | viewshed sweep of `vgvi()`, `vvi()`, `viewshed_list()`; potential viewshed and per-cell counts of `vvi()` |
 | `src/boxfilter.h` | box sums / counts / max / min of `gavi()` and `lacunarity()` |
 | `src/natural_breaks.h` | Jenks / Fisher natural breaks of `gavi()` |
 
 `engine_tests.cpp` compiles exactly these headers, runs them multi-threaded
 (OpenMP) on random data and compares every result with a naive single-threaded
-re-implementation. It also contains a structural port of the original
-(CGEI 0.3.1) VGVI/VVI viewshed loop to check its OpenMP structure.
+re-implementation. This includes the per-cell visibility counts of
+`vvi(mode = "cumulative" / "viewshed")`, which several threads accumulate
+concurrently (atomic increments). It also contains a structural port of the
+original (CGEI 0.3.1) VGVI/VVI viewshed loop to check its OpenMP structure.
 
 ```sh
 make release   # -O2, plain run
@@ -48,9 +50,9 @@ R_LIBS=../lib_asan Rscript -e 'testthat::test_dir("testthat")'
 
 | run | result |
 |---|---|
-| `make release` | 135 checks, 0 failures |
-| `make asan` | 135 checks, 0 failures, no sanitizer reports |
-| `make tsan` | 135 checks, 0 failures, no data races (new engines and old loop) |
+| `make release` | 191 checks, 0 failures |
+| `make asan` | 191 checks, 0 failures, no sanitizer reports |
+| `make tsan` | 191 checks, 0 failures, no data races (new engines and old loop) |
 | R test suite with ASan/UBSan-instrumented package | all expectations pass, no reports |
 
 The fast Fisher natural breaks (`FisherDC`, O(k n log n)) give the same

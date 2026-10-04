@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <limits>
 #include <random>
+#include <utility>
 #include <vector>
 
 #include "../../src/boxfilter.h"
@@ -139,6 +140,103 @@ void test_viewshed(std::mt19937 &rng, int nthreads) {
       CHECK(bad == 0, "viewshed %dx%d r=%d na=%.2f early=%d threads=%d: %d of %d observers differ",
             sc.nr, sc.nc, sc.r, sc.na, early, nthreads, bad, n);
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 1b. VVI counting: coverage runs, potential viewshed sizes and per-cell
+//     counts (difference arrays), and visible cells counted by several threads
+//     at once (atomic increments) vs naive loops
+// ---------------------------------------------------------------------------
+void test_vvi_counts(std::mt19937 &rng, int nthreads) {
+  struct Scene { int nr, nc, r; double na; };
+  const Scene scenes[] = {{40, 55, 9, 0.0}, {40, 55, 9, 0.05}, {35, 11, 9, 0.02}, {7, 9, 15, 0.1}};
+  for (const Scene &sc : scenes) {
+    std::vector<double> dsm = random_dsm(sc.nr, sc.nc, sc.na, rng);
+    const size_t ncell = static_cast<size_t>(sc.nr) * sc.nc;
+    LosTable T(sc.r);
+    CHECK(T.bind(sc.nc), "bind");
+    const std::vector<int> los = los_reference(sc.r, sc.r, sc.r, 2 * sc.r + 1);
+
+    // the runs are exactly the coverage without the observer cell, row-major
+    const CoverRuns cov(T);
+    std::vector<std::pair<int, int>> from_runs, from_cover;
+    for (const auto &run : cov.runs)
+      for (int c = run.lo; c <= run.hi; ++c) from_runs.emplace_back(run.dr, c);
+    for (size_t c = 0; c < T.cover_dr.size(); ++c)
+      if (T.cover_dr[c] != 0 || T.cover_dc[c] != 0) from_cover.emplace_back(T.cover_dr[c], T.cover_dc[c]);
+    CHECK(from_runs == from_cover, "coverage runs r=%d", sc.r);
+    CHECK(std::is_sorted(from_runs.begin(), from_runs.end()), "coverage runs not row-major r=%d", sc.r);
+
+    // observers: random cells (several per cell possible) and the corners
+    std::uniform_int_distribution<int> rr(0, sc.nr - 1), cc(0, sc.nc - 1);
+    std::uniform_real_distribution<double> u(0, 4);
+    std::vector<int> rows = {0, 0, sc.nr - 1, sc.nr - 1}, cols = {0, sc.nc - 1, 0, sc.nc - 1};
+    while (rows.size() < 300) {
+      rows.push_back(rr(rng));
+      cols.push_back(cc(rng));
+    }
+    const int n = static_cast<int>(rows.size());
+    std::vector<double> h0(n);
+    for (auto &h : h0) h = u(rng);
+
+    // potential viewshed: sizes and per-cell counts
+    const ValidPrefix valid(dsm.data(), sc.nr, sc.nc, nthreads);
+    CHECK(valid.all_valid == (sc.na == 0.0), "ValidPrefix::all_valid");
+    std::vector<int> naive_seen(ncell, 0);
+    int bad = 0;
+    for (int k = 0; k < n; ++k) {
+      int size = 1;
+      ++naive_seen[static_cast<size_t>(rows[k]) * sc.nc + cols[k]];
+      for (const auto &o : from_cover) {
+        const int r2 = rows[k] + o.first, c2 = cols[k] + o.second;
+        if (r2 < 0 || r2 >= sc.nr || c2 < 0 || c2 >= sc.nc) continue;
+        if (std::isnan(dsm[static_cast<size_t>(r2) * sc.nc + c2])) continue;
+        ++size;
+        ++naive_seen[static_cast<size_t>(r2) * sc.nc + c2];
+      }
+      if (size != count_seen(cov, valid, rows[k], cols[k], sc.nr, sc.nc)) ++bad;
+    }
+    CHECK(bad == 0, "count_seen %dx%d r=%d: %d observers differ", sc.nr, sc.nc, sc.r, bad);
+    std::vector<int> seen(ncell, -1);
+    accumulate_seen(cov, dsm.data(), sc.nr, sc.nc, rows, cols, nthreads, seen.data());
+    CHECK(seen == naive_seen, "accumulate_seen %dx%d r=%d threads=%d", sc.nr, sc.nc, sc.r, nthreads);
+
+    // visible cells counted concurrently (as in VVI_cells_cpp)
+    BlockMax bm(dsm.data(), sc.nr, sc.nc, nthreads);
+    std::vector<int> vis(ncell, 0), naive_vis(ncell, 0);
+    std::vector<SweepScratch> scratch;
+    for (int t = 0; t < nthreads; ++t) scratch.emplace_back(T);
+#pragma omp parallel for num_threads(nthreads) schedule(dynamic, 2)
+    for (int k = 0; k < n; ++k) {
+      SweepScratch &S = scratch[omp_get_thread_num()];
+      const long long cell0 = static_cast<long long>(rows[k]) * sc.nc + cols[k];
+      S.first_visit(T.ref_center());
+#pragma omp atomic
+      ++vis[cell0];
+      if (h0[k] > dsm[cell0]) {
+        double qb[4] = {0, 0, 0, 0};
+        quadrant_bounds(T, bm, rows[k], cols[k], h0[k], qb);
+        auto visit = [&](int s, long long cell) {
+          if (!S.first_visit(T.step[s].ref)) return;
+#pragma omp atomic
+          ++vis[cell];
+        };
+        sweep_lines<true>(T, dsm.data(), sc.nr, sc.nc, cell0, rows[k], cols[k], h0[k], qb, true, S,
+                          visit);
+      }
+      S.reset();
+    }
+    for (int k = 0; k < n; ++k) {
+      const long long cell0 = static_cast<long long>(rows[k]) * sc.nc + cols[k];
+      if (std::isnan(dsm[cell0])) {
+        ++naive_vis[cell0];  // only the observer cell (h0 > NaN is false)
+        continue;
+      }
+      for (long long c : naive_visible(los, sc.r, dsm.data(), sc.nr, sc.nc, rows[k], cols[k], h0[k]))
+        ++naive_vis[c];
+    }
+    CHECK(vis == naive_vis, "visible counts %dx%d r=%d threads=%d", sc.nr, sc.nc, sc.r, nthreads);
   }
 }
 
@@ -342,6 +440,7 @@ int main() {
   std::mt19937 rng(20241004);
   for (int nthreads : {1, 4}) {
     test_viewshed(rng, nthreads);
+    test_vvi_counts(rng, nthreads);
     test_boxfilters(rng, nthreads);
   }
   test_natural_breaks(rng);

@@ -109,3 +109,39 @@ test_that("observers outside the raster or with NA cell are skipped", {
   v <- cpp_vgvi(dsm, dsm, c(NA, 0, 5), c(5, 5, NA), rep(1.7, 3), 3)
   expect_true(all(is.na(v)))
 })
+
+test_that("VVI counts and per-cell counts equal the per-observer lists", {
+  scenes <- list(
+    list(dsm = random_dsm(45, 60, seed = 4), r = 9),
+    list(dsm = random_dsm(45, 60, na_frac = 0.05, seed = 5), r = 9),               # NA heights
+    list(dsm = random_dsm(40, 13, n_blocks = 6, na_frac = 0.02, seed = 6), r = 9),  # narrower than 2r+1
+    list(dsm = random_dsm(8, 9, n_blocks = 2, seed = 7), r = 20)                     # radius > raster
+  )
+  for (s in seq_along(scenes)) {
+    sc <- scenes[[s]]
+    nr <- nrow(sc$dsm)
+    nc <- ncol(sc$dsm)
+    set.seed(20 + s)
+    # random cells, the four corners, invalid observers and duplicates
+    rows <- c(sample.int(nr, 30, TRUE), 1, 1, nr, nr, NA, 0, nr + 1)
+    cols <- c(sample.int(nc, 30, TRUE), 1, nc, 1, nc, 3, 3, 3)
+    rows <- c(rows, rows[1:3])
+    cols <- c(cols, cols[1:3])
+    h0 <- stats::runif(length(rows), 0, 6)
+    d <- mk_rast(sc$dsm)
+    geom <- CGEI:::raster_geometry(d)
+    vals <- terra::values(d, mat = FALSE)
+    lists <- cpp_vvi(d, rows, cols, h0, sc$r)
+    vis <- lapply(lists, `[[`, "visible_cells")
+    seen <- lapply(lists, `[[`, "viewshed")
+    for (cores in c(1L, 4L)) {
+      info <- paste("scene", s, "cores", cores)
+      cnt <- CGEI:::VVI_count_cpp(geom, vals, as.integer(cols), as.integer(rows), h0, sc$r, ncores = cores)
+      expect_identical(cnt$n_visible, lengths(vis), info = info)
+      expect_identical(cnt$n_viewshed, lengths(seen), info = info)
+      cells <- CGEI:::VVI_cells_cpp(geom, vals, as.integer(cols), as.integer(rows), h0, sc$r, ncores = cores)
+      expect_identical(cells$visible_count, tabulate(unlist(vis), nbins = nr * nc), info = info)
+      expect_identical(cells$viewshed_count, tabulate(unlist(seen), nbins = nr * nc), info = info)
+    }
+  }
+})

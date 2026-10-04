@@ -30,6 +30,13 @@ test_that("VGVI / VVI results are identical for 1, 2 and 4 threads", {
   expect_identical(c4, c1)
   expect_identical(c1$n_visible, lengths(lapply(v1, `[[`, "visible_cells")))
   expect_identical(c1$n_viewshed, lengths(lapply(v1, `[[`, "viewshed")))
+  # per-cell counts (accumulated by all threads)
+  e1 <- CGEI:::VVI_cells_cpp(geom, vals, d$cols, d$rows, d$h0, 30, ncores = 1L)
+  expect_identical(CGEI:::VVI_cells_cpp(geom, vals, d$cols, d$rows, d$h0, 30, ncores = 2L), e1)
+  expect_identical(CGEI:::VVI_cells_cpp(geom, vals, d$cols, d$rows, d$h0, 30, ncores = 4L), e1)
+  many <- CGEI:::VVI_cells_cpp(geom, vals, rep(d$cols, 25), rep(d$rows, 25), rep(d$h0, 25), 30, ncores = 4L)
+  expect_identical(many$visible_count, e1$visible_count * 25L)
+  expect_identical(many$viewshed_count, e1$viewshed_count * 25L)
 })
 
 test_that("observers are independent: batch == single calls, any order, many per thread", {
@@ -81,6 +88,17 @@ test_that("R wrappers give identical results for different numbers of cores", {
   v1 <- suppressMessages(vgvi(s$observers, s$dsm, s$dtm, s$greenspace, max_distance = 30, cores = 1))
   v4 <- suppressMessages(vgvi(s$observers, s$dsm, s$dtm, s$greenspace, max_distance = 30, cores = 4))
   expect_identical(v4$VGVI, v1$VGVI)
+  for (mode in c("VVI", "cumulative", "viewshed")) {
+    w1 <- suppressMessages(vvi(s$observers, s$dsm, s$dtm, max_distance = 30, mode = mode, cores = 1))
+    w4 <- suppressMessages(vvi(s$observers, s$dsm, s$dtm, max_distance = 30, mode = mode, cores = 4))
+    if (mode == "viewshed") {
+      expect_identical(terra::values(w4), terra::values(w1))
+    } else if (mode == "VVI") {
+      expect_identical(w4$VVI, w1$VVI)
+    } else {
+      expect_identical(w4, w1)
+    }
+  }
   x <- c(s$greenspace, s$dsm)
   l1 <- lacunarity(x, cores = 1)
   l4 <- lacunarity(x, cores = 4)

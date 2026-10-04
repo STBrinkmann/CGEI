@@ -46,9 +46,17 @@ VviObservers prepare(const IntegerVector &x0, const IntegerVector &y0, const Ras
   return o;
 }
 
-// Visible cells (1-based, sorted) and potential viewshed (cells reached by a
-// line of sight inside the raster with a valid height; 1-based, sorted) of
-// every observer. If counts_only, only the two set sizes are stored.
+// What run_vvi() computes:
+//   kLists   visible cells and potential viewshed (R cell numbers, sorted) of
+//            every observer (plus their sizes)
+//   kCounts  only the sizes of both sets per observer
+//   kCells   per raster cell the number of observers that see it / whose
+//            potential viewshed contains it (`visible_count`, `seen_count`:
+//            ncell values each, visible_count zero-initialised; n_seen unset)
+// The potential viewshed are the cells reached by a line of sight (static
+// geometry) inside the raster with a valid height, plus the observer cell.
+enum class VviOut { kLists, kCounts, kCells };
+
 struct VviResult {
   std::vector<std::vector<int>> visible, seen;
   std::vector<int> n_visible, n_seen;
@@ -57,7 +65,7 @@ struct VviResult {
 VviResult run_vvi(const NumericVector &dsm, const NumericVector &dsm_values, const IntegerVector &x0,
                   const IntegerVector &y0, const NumericVector &h0, const int radius,
                   const int ncores, const bool display_progress, const bool early_stop,
-                  const bool counts_only) {
+                  const VviOut what, int *visible_count = nullptr, int *seen_count = nullptr) {
   const RasterInfo ras(dsm);
   if (dsm_values.size() != static_cast<R_xlen_t>(ras.nrow) * ras.ncol)
     Rcpp::stop("dsm_values does not match the dimensions of dsm.");
@@ -72,17 +80,22 @@ VviResult run_vvi(const NumericVector &dsm, const NumericVector &dsm_values, con
   const int r = static_cast<int>(std::round(radius / ras.res));
   cgei::LosTable T(r);
   if (!T.bind(ras.ncol)) Rcpp::stop("Raster too large for the radius.");
+  const cgei::CoverRuns cov(T);
 
   const double *dsm_v = dsm_values.begin();
   const double *h0_v = h0.begin();
   const int nthreads = cgei::resolve_threads(ncores);
   // Block maxima for the early-termination bounds (an empty grid if disabled)
   const cgei::BlockMax bm(dsm_v, early_stop ? ras.nrow : 0, early_stop ? ras.ncol : 0, nthreads);
+  // valid-cell counts for the size of the potential viewshed (kCounts only)
+  const cgei::ValidPrefix valid(dsm_v, what == VviOut::kCounts ? ras.nrow : 0, ras.ncol, nthreads);
 
+  const bool lists = what == VviOut::kLists;
+  const bool cells = what == VviOut::kCells;
   VviResult res;
   res.n_visible.assign(n, 0);
   res.n_seen.assign(n, 0);
-  if (!counts_only) {
+  if (lists) {
     res.visible.resize(n);
     res.seen.resize(n);
   }
@@ -93,7 +106,6 @@ VviResult run_vvi(const NumericVector &dsm, const NumericVector &dsm_values, con
 
   const int nvalid = static_cast<int>(obs.order.size());
   cgei::ParallelProgress progress(nvalid, display_progress);
-  const int ncov = static_cast<int>(T.cover_dr.size());
 
 #ifdef _OPENMP
 #pragma omp parallel for num_threads(nthreads) schedule(dynamic, 16)
@@ -109,8 +121,14 @@ VviResult run_vvi(const NumericVector &dsm, const NumericVector &dsm_values, con
     // Visible cells: the observer cell plus everything found by the sweep.
     S.first_visit(T.ref_center());
     int n_vis = 1;
-    std::vector<int> *vis = counts_only ? nullptr : &res.visible[k];
+    std::vector<int> *vis = lists ? &res.visible[k] : nullptr;
     if (vis) vis->push_back(static_cast<int>(cell0) + 1);
+    if (cells) {
+#ifdef _OPENMP
+#pragma omp atomic
+#endif
+      ++visible_count[cell0];
+    }
     if (hk > dsm_v[cell0]) {
       double qbound[4] = {0, 0, 0, 0};
       if (early_stop) cgei::quadrant_bounds(T, bm, row0, col0, hk, qbound);
@@ -118,6 +136,12 @@ VviResult run_vvi(const NumericVector &dsm, const NumericVector &dsm_values, con
         if (!S.first_visit(T.step[s].ref)) return;
         ++n_vis;
         if (vis) vis->push_back(static_cast<int>(cell) + 1);  // C++ -> R cell number
+        if (cells) {
+#ifdef _OPENMP
+#pragma omp atomic
+#endif
+          ++visible_count[cell];
+        }
       };
       const bool interior = row0 - r >= 0 && row0 + r < ras.nrow && col0 - r >= 0 &&
                             col0 + r < ras.ncol;
@@ -133,35 +157,41 @@ VviResult run_vvi(const NumericVector &dsm, const NumericVector &dsm_values, con
     if (vis) std::sort(vis->begin(), vis->end());
     res.n_visible[k] = n_vis;
 
-    // Potential viewshed: all cells reached by any line of sight (static
-    // geometry) that lie inside the raster and have a valid height.
-    std::vector<int> *seen = counts_only ? nullptr : &res.seen[k];
-    int n_seen = 0;
-    bool own_done = false;
-    for (int c = 0; c < ncov; ++c) {
-      const int rr = row0 + T.cover_dr[c];
-      const int cc = col0 + T.cover_dc[c];
-      if (!own_done && (rr > row0 || (rr == row0 && cc > col0))) {
-        // keep the output sorted: the observer cell goes before the first
-        // covered cell that follows it in row-major order
-        ++n_seen;
-        if (seen) seen->push_back(static_cast<int>(cell0) + 1);
-        own_done = true;
-      }
-      if (rr < 0 || rr >= ras.nrow || cc < 0 || cc >= ras.ncol) continue;
-      const long long cell = static_cast<long long>(rr) * ras.ncol + cc;
-      if (std::isnan(dsm_v[cell])) continue;
-      ++n_seen;
-      if (seen) seen->push_back(static_cast<int>(cell) + 1);
+    // Potential viewshed
+    if (lists) {
+      std::vector<int> &seen = res.seen[k];
+      bool own_done = false;
+      cov.for_each(row0, col0, ras.nrow, ras.ncol, [&](const int rr, const int c0, const int c1) {
+        if (!own_done && (rr > row0 || (rr == row0 && c0 > col0))) {
+          // keep the output sorted: the observer cell goes before the first
+          // covered cell that follows it in row-major order
+          seen.push_back(static_cast<int>(cell0) + 1);
+          own_done = true;
+        }
+        const long long base = static_cast<long long>(rr) * ras.ncol;
+        for (int c = c0; c <= c1; ++c) {
+          if (!std::isnan(dsm_v[base + c])) seen.push_back(static_cast<int>(base + c) + 1);
+        }
+      });
+      if (!own_done) seen.push_back(static_cast<int>(cell0) + 1);
+      res.n_seen[k] = static_cast<int>(seen.size());
+    } else if (!cells) {
+      res.n_seen[k] = cgei::count_seen(cov, valid, row0, col0, ras.nrow, ras.ncol);
     }
-    if (!own_done) {
-      ++n_seen;
-      if (seen) seen->push_back(static_cast<int>(cell0) + 1);
-    }
-    res.n_seen[k] = n_seen;
     progress.tick();
   }
   progress.finish();  // throws if the user interrupted
+
+  if (cells) {
+    std::vector<int> rows, cols;
+    rows.reserve(nvalid);
+    cols.reserve(nvalid);
+    for (int idx = 0; idx < nvalid; ++idx) {
+      rows.push_back(obs.row[obs.order[idx]]);
+      cols.push_back(obs.col[obs.order[idx]]);
+    }
+    cgei::accumulate_seen(cov, dsm_v, ras.nrow, ras.ncol, rows, cols, nthreads, seen_count);
+  }
   return res;
 }
 
@@ -175,7 +205,7 @@ Rcpp::List VVI_cpp(const Rcpp::NumericVector &dsm, const Rcpp::NumericVector &ds
                    const int ncores = 1, const bool display_progress = false,
                    const bool early_stop = true) {
   VviResult res = run_vvi(dsm, dsm_values, x0, y0, h0, radius, ncores, display_progress,
-                          early_stop, false);
+                          early_stop, VviOut::kLists);
   const int n = static_cast<int>(res.n_visible.size());
   Rcpp::List output(n);
   for (int k = 0; k < n; ++k) {
@@ -194,7 +224,30 @@ Rcpp::List VVI_count_cpp(const Rcpp::NumericVector &dsm, const Rcpp::NumericVect
                          const int ncores = 1, const bool display_progress = false,
                          const bool early_stop = true) {
   VviResult res = run_vvi(dsm, dsm_values, x0, y0, h0, radius, ncores, display_progress,
-                          early_stop, true);
+                          early_stop, VviOut::kCounts);
   return Rcpp::List::create(Rcpp::Named("n_visible") = Rcpp::wrap(res.n_visible),
                             Rcpp::Named("n_viewshed") = Rcpp::wrap(res.n_seen));
+}
+
+// Per raster cell (R cell order): the number of observers that see the cell
+// and the number of observers whose potential viewshed contains it, i.e.
+// tabulate() of the cells returned by VVI_cpp(), without the per-observer
+// lists (vvi(mode = "cumulative" / "viewshed")).
+// [[Rcpp::export]]
+Rcpp::List VVI_cells_cpp(const Rcpp::NumericVector &dsm, const Rcpp::NumericVector &dsm_values,
+                         const Rcpp::IntegerVector &x0, const Rcpp::IntegerVector &y0,
+                         const Rcpp::NumericVector &h0, const int radius,
+                         const int ncores = 1, const bool display_progress = false,
+                         const bool early_stop = true) {
+  const RasterInfo ras(dsm);
+  const R_xlen_t ncell = static_cast<R_xlen_t>(ras.nrow) * ras.ncol;
+  if (static_cast<double>(ncell) >= 2147483647.0)
+    Rcpp::stop("The DSM has too many cells to return R cell numbers.");
+  Rcpp::IntegerVector visible_count(ncell);  // zero-initialised
+  Rcpp::IntegerVector seen_count(ncell);
+  // raw pointers: no R object is touched inside the parallel region
+  run_vvi(dsm, dsm_values, x0, y0, h0, radius, ncores, display_progress, early_stop,
+          VviOut::kCells, visible_count.begin(), seen_count.begin());
+  return Rcpp::List::create(Rcpp::Named("visible_count") = visible_count,
+                            Rcpp::Named("viewshed_count") = seen_count);
 }

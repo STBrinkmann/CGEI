@@ -194,6 +194,25 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// VVI_cells_cpp
+Rcpp::List VVI_cells_cpp(const Rcpp::NumericVector& dsm, const Rcpp::NumericVector& dsm_values, const Rcpp::IntegerVector& x0, const Rcpp::IntegerVector& y0, const Rcpp::NumericVector& h0, const int radius, const int ncores, const bool display_progress, const bool early_stop);
+RcppExport SEXP _CGEI_VVI_cells_cpp(SEXP dsmSEXP, SEXP dsm_valuesSEXP, SEXP x0SEXP, SEXP y0SEXP, SEXP h0SEXP, SEXP radiusSEXP, SEXP ncoresSEXP, SEXP display_progressSEXP, SEXP early_stopSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type dsm(dsmSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type dsm_values(dsm_valuesSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type x0(x0SEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type y0(y0SEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type h0(h0SEXP);
+    Rcpp::traits::input_parameter< const int >::type radius(radiusSEXP);
+    Rcpp::traits::input_parameter< const int >::type ncores(ncoresSEXP);
+    Rcpp::traits::input_parameter< const bool >::type display_progress(display_progressSEXP);
+    Rcpp::traits::input_parameter< const bool >::type early_stop(early_stopSEXP);
+    rcpp_result_gen = Rcpp::wrap(VVI_cells_cpp(dsm, dsm_values, x0, y0, h0, radius, ncores, display_progress, early_stop));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_CGEI_IDW_cpp", (DL_FUNC) &_CGEI_IDW_cpp, 11},
@@ -207,6 +226,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_CGEI_cgei_openmp_info", (DL_FUNC) &_CGEI_cgei_openmp_info, 0},
     {"_CGEI_VVI_cpp", (DL_FUNC) &_CGEI_VVI_cpp, 9},
     {"_CGEI_VVI_count_cpp", (DL_FUNC) &_CGEI_VVI_count_cpp, 9},
+    {"_CGEI_VVI_cells_cpp", (DL_FUNC) &_CGEI_VVI_cells_cpp, 9},
     {NULL, NULL, 0}
 };
 

@@ -234,6 +234,34 @@ vvi <- function(observer, dsm_rast, dtm_rast,
     return(observer)
   }
   
+  if ((mode == "cumulative" && !by_row) || mode == "viewshed") {
+    # Per raster cell, the number of observers that can see it (visible_count)
+    # and of observers whose viewshed contains it (viewshed_count)
+    cell_counts <- VVI_cells_cpp(dsm = dsm_cpp_rast, dsm_values = dsm_vec,
+                                 x0 = c0, y0 = r0, radius = max_distance, h0 = height_0_vec,
+                                 ncores = cores, display_progress = progress)
+    visible_count <- cell_counts$visible_count
+    viewshed_count <- cell_counts$viewshed_count
+    
+    if (mode == "cumulative") {
+      # Cumulative VVI - Total:
+      # How many cells in the accumulated viewsheds are visible from all observers?
+      return(sum(visible_count > 0) / sum(viewshed_count > 0))
+    }
+    
+    # Viewshed:
+    # n_views:  Per raster cell, how many observers can see it? Not taking into 
+    #           account if an observer can see the cell or not
+    # 
+    # view_per_viewshed:  % of observers that can see the raster cell. Taking only
+    #                     those observers that can potentially see the cell
+    output <- terra::rast(dsm_rast)
+    output$n_views <- visible_count
+    output[[1]][is.na(visible_count / viewshed_count)] <- NA
+    output$view_per_viewshed <- visible_count / viewshed_count
+    return(output)
+  }
+  
   # Calculate viewsheds. Returns a list:
   # visible_cells: Cells that are visible from the observer
   # viewshed: All cells that fall within the viewshed regardless of visibility
@@ -242,86 +270,35 @@ vvi <- function(observer, dsm_rast, dtm_rast,
                       ncores = cores, display_progress = progress)
   
   if(mode == "VVI") {
-    # VVI:
+    # VVI per feature (by_row = TRUE):
     # % of visible cells to all cells in the viewshed
-    if(by_row) {
-      # Number of distinct viewshed / visible cells of every feature
-      # (NA for features without any valid observer point)
-      n_viewshed <- count_cells_by_feature(vvi_list, "viewshed", observer$row_id_for_cumulative_vvi,
-                                           nrow(.observer), terra::ncell(dsm_rast))
-      n_visible_cells <- count_cells_by_feature(vvi_list, "visible_cells", observer$row_id_for_cumulative_vvi,
-                                                nrow(.observer), terra::ncell(dsm_rast))
-      
-      .observer <- .observer %>% 
-        dplyr::mutate(VVI = n_visible_cells / n_viewshed,
-                      n_visible_cells = n_visible_cells) %>% 
-        dplyr::select(VVI, n_visible_cells, dplyr::everything())
-      return(.observer)
-    } else {
-      n_visible_cells <- unlist(sapply(vvi_list, function(vvi) {
-        length(vvi$visible_cells)
-      }))
-      n_viewshed <- unlist(sapply(vvi_list, function(vvi) {
-        length(vvi$viewshed)
-      }))
-      vvi <- n_visible_cells / n_viewshed
-      
-      observer <- observer %>% 
-        dplyr::mutate(VVI = vvi,
-                      n_visible_cells = n_visible_cells) %>% 
-        dplyr::select(VVI, n_visible_cells, dplyr::everything())
-      return(observer)
-    }
+    # Number of distinct viewshed / visible cells of every feature
+    # (NA for features without any valid observer point)
+    n_viewshed <- count_cells_by_feature(vvi_list, "viewshed", observer$row_id_for_cumulative_vvi,
+                                         nrow(.observer), terra::ncell(dsm_rast))
+    n_visible_cells <- count_cells_by_feature(vvi_list, "visible_cells", observer$row_id_for_cumulative_vvi,
+                                              nrow(.observer), terra::ncell(dsm_rast))
+    
+    .observer <- .observer %>% 
+      dplyr::mutate(VVI = n_visible_cells / n_viewshed,
+                    n_visible_cells = n_visible_cells) %>% 
+      dplyr::select(VVI, n_visible_cells, dplyr::everything())
+    return(.observer)
   } else if (mode == "cumulative") {
-    # Cumulative VVI - Total:
-    if(by_row) {
-      # How much of the accumulated viewsheds is visible from a complete feature of the observer?
-      # Get cumulative viewshed of all observers 
-      viewshed_cells <- unlist(sapply(vvi_list, function(vvi) {
-        vvi$viewshed
-      }))
-      
-      # Number of distinct visible cells of every feature
-      n_visible_cells <- count_cells_by_feature(vvi_list, "visible_cells", observer$row_id_for_cumulative_vvi,
-                                                nrow(.observer), terra::ncell(dsm_rast))
-      
-      .observer <- .observer %>% 
-        dplyr::mutate(CVVI = n_visible_cells / dplyr::n_distinct(viewshed_cells)) %>% 
-        dplyr::select(CVVI, dplyr::everything())
-      return(.observer)
-    } else {
-      # How many cells in the accumulated viewsheds are visible from all observers?
-      visible_cells <- unlist(sapply(vvi_list, function(vvi) {
-        vvi$visible_cells
-      }))
-      viewshed_cells <- unlist(sapply(vvi_list, function(vvi) {
-        vvi$viewshed
-      }))
-      
-      return(dplyr::n_distinct(visible_cells) / dplyr::n_distinct(viewshed_cells))
-    }
-  } else if(mode == "viewshed") {
-    # Viewshed:
-    # n_views:  Per raster cell, how many observers can see it? Not taking into 
-    #           account if an observer can see the cell or not
-    # 
-    # view_per_viewshed:  % of observers that can see the raster cell. Taking only
-    #                     those observers that can potentially see the cell
-    visible_cells <- unlist(sapply(vvi_list, function(vvi) {
-      vvi$visible_cells
-    }))
-    viewshed_cells <- unlist(sapply(vvi_list, function(vvi) {
-      vvi$viewshed
-    }))
+    # Cumulative VVI per feature (by_row = TRUE):
+    # How much of the accumulated viewsheds is visible from a complete feature of the observer?
+    # Number of distinct cells in the accumulated viewsheds of all observers
+    viewshed_cells <- as.integer(unlist(lapply(vvi_list, `[[`, "viewshed"), use.names = FALSE))
+    n_viewshed_total <- sum(tabulate(viewshed_cells, nbins = terra::ncell(dsm_rast)) > 0)
     
-    visible_count <- tabulate(visible_cells, nbins = terra::ncell(dsm_rast))
-    viewshed_count <- tabulate(viewshed_cells, nbins = terra::ncell(dsm_rast))
+    # Number of distinct visible cells of every feature
+    n_visible_cells <- count_cells_by_feature(vvi_list, "visible_cells", observer$row_id_for_cumulative_vvi,
+                                              nrow(.observer), terra::ncell(dsm_rast))
     
-    output <- terra::rast(dsm_rast)
-    output$n_views <- visible_count
-    output[[1]][is.na(visible_count / viewshed_count)] <- NA
-    output$view_per_viewshed <- visible_count / viewshed_count
-    return(output)
+    .observer <- .observer %>% 
+      dplyr::mutate(CVVI = n_visible_cells / n_viewshed_total) %>% 
+      dplyr::select(CVVI, dplyr::everything())
+    return(.observer)
   }
 }
 
